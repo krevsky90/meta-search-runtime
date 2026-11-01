@@ -30,3 +30,4 @@ mvn clean verify
 - Group ID: `org.krev.metasearch`
 - Artifact ID: `meta-search-runtime`
 - Version: `1.0-SNAPSHOT`
+ 
