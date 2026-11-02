@@ -1,0 +1,14 @@
+info:
+https://chatgpt.com/g/g-p-6ae657f39a80819188591773fe37cf8a-meta-search-runtime/c/6ae75ef7-b398-83ed-8085-685a7e671dca
+
+Метод	Где выполняется callback
+thenApply(fn)	Поток, завершающий предыдущий future, либо поток регистрации, если предыдущий уже завершён
+thenApplyAsync(fn)	Обычно ForkJoinPool.commonPool()
+thenApplyAsync(fn, executor)	Переданный executor
+thenCombine(other, fn)	Аналогично thenApply: callback не получает отдельный executor автоматически
+thenCombineAsync(other, fn)	Обычно ForkJoinPool.commonPool()
+thenCombineAsync(other, fn, executor)	Переданный executor
+
+То же семейство правил действует для thenCompose, handle, whenComplete и других методов с суффиксом Async.
+
+Самая важная мысль: суффикс Async отвечает за асинхронное планирование продолжения, а не за то, что вся цепочка автоматически начинает работать в отдельных потоках. Без Async продолжение может выполняться прямо в потоке, который завершил предыдущую стадию.
