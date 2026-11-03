@@ -124,7 +124,7 @@ public class SearchPipeline implements AutoCloseable {
             return ErrorCode.TIMEOUT;
         }
 
-        if (ex instanceof ConnectException || ex instanceof IOException) {
+        if (ex instanceof IOException) { // || ex instanceof ConnectException
             return ErrorCode.CONNECTION_FAILED;
         }
 

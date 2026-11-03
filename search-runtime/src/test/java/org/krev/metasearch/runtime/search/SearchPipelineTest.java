@@ -4,6 +4,7 @@ package org.krev.metasearch.runtime.search;
 import org.junit.jupiter.api.Test;
 import org.krev.metasearch.runtime.error_model.ErrorCode;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
+import org.krev.metasearch.runtime.error_model.SourceError;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
 import org.krev.metasearch.runtime.model.Offer;
@@ -138,7 +139,7 @@ class SearchPipelineTest {
             assertEquals(
                     List.of("catalog", "offers"),
                     result.errors().stream()
-                            .map(error -> error.source())
+                            .map(SourceError::source)
                             .toList()
             );
 
@@ -148,7 +149,7 @@ class SearchPipelineTest {
                             ErrorCode.TIMEOUT
                     ),
                     result.errors().stream()
-                            .map(error -> error.code())
+                            .map(SourceError::code)
                             .toList()
             );
         }
