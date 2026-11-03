@@ -13,7 +13,6 @@ import org.krev.metasearch.runtime.model.Review;
 import org.krev.metasearch.runtime.model.SearchResult;
 
 import java.io.IOException;
-import java.net.ConnectException;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.*;
