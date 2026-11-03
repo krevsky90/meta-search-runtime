@@ -279,4 +279,75 @@ class SearchPipelineTest {
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
         }
     }
+
+    // --------------------------------------------------------
+    // 6. Test executor threads
+    // этот тест доказывает, что обе CPU-стадии выполнялись в выделенном пуле.
+    // Но он не доказывает, что они выполнялись в разных потоках.
+    // И это нормально — мы не должны требовать от executor такого поведения.
+    // --------------------------------------------------------
+
+    @Test
+    void checkExecutorPool() throws Exception {
+        ConcurrentLinkedQueue<String> executedThreads = new ConcurrentLinkedQueue<>();
+
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable);
+            thread.setName("search-cpu-" + thread.threadId());
+            return thread;
+        };
+
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                2,
+                2,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(),
+                threadFactory,
+                new ThreadPoolExecutor.AbortPolicy()
+        ) {
+            @Override
+            protected void beforeExecute(Thread thread, Runnable task) {
+                executedThreads.add(thread.getName());
+                super.beforeExecute(thread, task);
+            }
+        };
+
+
+        when(sourceClient.searchCatalog(QUERY))
+                .thenReturn(CompletableFuture.completedFuture(
+                        List.of(new Product("p1"), new Product("p2"))
+                ));
+
+        when(sourceClient.searchOffers(QUERY))
+                .thenReturn(CompletableFuture.completedFuture(
+                        List.of(new Offer("o1"))
+                ));
+
+        when(sourceClient.searchReviews(QUERY))
+                .thenReturn(CompletableFuture.completedFuture(
+                        List.of(new Review("r1"))
+                ));
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor)) {
+
+            SearchResultBox result = pipeline.search(QUERY)
+                    .get(2, TimeUnit.SECONDS);
+
+            assertTrue(result.isSuccessful());
+            assertTrue(result.errors().isEmpty());
+
+            assertEquals(2, result.result().products().size());
+            assertEquals(1, result.result().offers().size());
+            assertEquals(1, result.result().reviews().size());
+
+            // Проверяем, что обе CPU-стадии выполнялись в нашем executor.
+            assertEquals(2, executedThreads.size());
+
+            assertTrue(executedThreads.stream().allMatch(name -> name.startsWith("search-cpu-")));
+        } finally {
+//            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
 }

@@ -22,7 +22,7 @@ import java.util.stream.Stream;
 
 public class SearchPipeline implements AutoCloseable {
     private final SearchSourceClient sourceClient;
-    private final ThreadPoolExecutor rankingExecutor;
+    private final ThreadPoolExecutor cpuExecutor;
 
     public SearchPipeline(SearchSourceClient sourceClient) {
         this(sourceClient, new ThreadPoolExecutor(
@@ -37,10 +37,10 @@ public class SearchPipeline implements AutoCloseable {
 
     SearchPipeline(
             SearchSourceClient sourceClient,
-            ThreadPoolExecutor rankingExecutor
+            ThreadPoolExecutor cpuExecutor
     ) {
         this.sourceClient = Objects.requireNonNull(sourceClient);
-        this.rankingExecutor = Objects.requireNonNull(rankingExecutor);
+        this.cpuExecutor = Objects.requireNonNull(cpuExecutor);
     }
 
     // --------------------------------------------------------
@@ -164,11 +164,13 @@ public class SearchPipeline implements AutoCloseable {
     // 5. Product processing
     // --------------------------------------------------------
     private List<Product> filterProducts(List<Product> products) {
+        System.out.println("filterProducts: " + Thread.currentThread().getName());
         // TODO: implement filtering
         return products;
     }
 
     private List<Product> rankProducts(List<Product> products) {
+        System.out.println("rankProducts: " + Thread.currentThread().getName());
         // TODO: implement ranking
         return products;
     }
@@ -246,11 +248,11 @@ public class SearchPipeline implements AutoCloseable {
                     // Filter and rank products on the dedicated executor.
                     return CompletableFuture.supplyAsync(
                                     () -> filterProducts(productBox.data()),
-                                    rankingExecutor
+                                    cpuExecutor
                             )
                             .thenApplyAsync(
                                     this::rankProducts,
-                                    rankingExecutor
+                                    cpuExecutor
                             )
                             .thenApply(rankedProducts -> {
                                 SearchBox<List<Product>> rankedProductBox =
@@ -273,13 +275,13 @@ public class SearchPipeline implements AutoCloseable {
     // --------------------------------------------------------
     @Override
     public void close() {
-        rankingExecutor.shutdown();
+        cpuExecutor.shutdown();
         try {
-            if (!rankingExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                rankingExecutor.shutdownNow();
+            if (!cpuExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                cpuExecutor.shutdownNow();
             }
         } catch (InterruptedException ex) {
-            rankingExecutor.shutdownNow();
+            cpuExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
