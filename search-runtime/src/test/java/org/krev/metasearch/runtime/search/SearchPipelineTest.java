@@ -159,8 +159,7 @@ class SearchPipelineTest {
     // --------------------------------------------------------
 
     @Test
-    void allSourcesFailed() throws Exception {
-
+    void allSourcesFailed() {
         when(sourceClient.searchCatalog(QUERY))
                 .thenReturn(CompletableFuture.failedFuture(
                         new ConnectException("Catalog unavailable")
