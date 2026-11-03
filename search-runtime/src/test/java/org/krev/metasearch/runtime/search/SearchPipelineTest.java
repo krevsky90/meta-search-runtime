@@ -17,17 +17,14 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SearchPipelineTest {
 
     private static final String QUERY = "iphone";
 
-    private final SearchSourceClient sourceClient =
-            mock(SearchSourceClient.class);
+    private final SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
     // --------------------------------------------------------
     // 1. All sources successful
@@ -56,12 +53,12 @@ class SearchPipelineTest {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
-            assertTrue(result.isSuccessful());
-            assertTrue(result.errors().isEmpty());
+            assertThat(result.isSuccessful()).isTrue();
+            assertThat(result.errors()).isEmpty();
 
-            assertEquals(2, result.result().products().size());
-            assertEquals(1, result.result().offers().size());
-            assertEquals(1, result.result().reviews().size());
+            assertThat(result.result().products()).hasSize(2);
+            assertThat(result.result().offers()).hasSize(1);
+            assertThat(result.result().reviews()).hasSize(1);
         }
     }
 
@@ -89,19 +86,16 @@ class SearchPipelineTest {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
-            assertFalse(result.isSuccessful());
+            assertThat(result.isSuccessful()).isFalse();
 
-            assertTrue(result.result().products().isEmpty());
-            assertEquals(1, result.result().offers().size());
-            assertEquals(1, result.result().reviews().size());
+            assertThat(result.result().products()).isEmpty();
+            assertThat(result.result().offers()).hasSize(1);
+            assertThat(result.result().reviews()).hasSize(1);
 
-            assertEquals(1, result.errors().size());
+            assertThat(result.errors()).hasSize(1);
 
-            assertEquals("catalog", result.errors().getFirst().source());
-            assertEquals(
-                    ErrorCode.CONNECTION_FAILED,
-                    result.errors().getFirst().code()
-            );
+            assertThat(result.errors().getFirst().source()).isEqualTo("catalog");
+            assertThat(ErrorCode.CONNECTION_FAILED).isEqualTo(result.errors().getFirst().code());
         }
     }
 
@@ -131,30 +125,21 @@ class SearchPipelineTest {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
-            assertFalse(result.isSuccessful());
+            assertThat(result.isSuccessful()).isFalse();
 
-            assertTrue(result.result().products().isEmpty());
-            assertTrue(result.result().offers().isEmpty());
-            assertEquals(1, result.result().reviews().size());
+            assertThat(result.result().products()).isEmpty();
+            assertThat(result.result().offers()).isEmpty();
+            assertThat(result.result().reviews()).hasSize(1);
 
-            assertEquals(2, result.errors().size());
+            assertThat(result.errors()).hasSize(2);
 
-            assertEquals(
-                    List.of("catalog", "offers"),
-                    result.errors().stream()
-                            .map(SourceError::source)
-                            .toList()
-            );
+            assertThat(result.errors())
+                    .extracting(SourceError::source)
+                    .containsExactly("catalog", "offers");
 
-            assertEquals(
-                    List.of(
-                            ErrorCode.CONNECTION_FAILED,
-                            ErrorCode.TIMEOUT
-                    ),
-                    result.errors().stream()
-                            .map(SourceError::code)
-                            .toList()
-            );
+            assertThat(result.errors())
+                    .extracting(SourceError::code)
+                    .containsExactly(ErrorCode.CONNECTION_FAILED, ErrorCode.TIMEOUT);
         }
     }
 
@@ -181,21 +166,18 @@ class SearchPipelineTest {
 
         try (SearchPipeline pipeline = new SearchPipeline(sourceClient)) {
 
-            ExecutionException exception = assertThrows(
-                    ExecutionException.class,
-                    () -> pipeline.search(QUERY)
-                            .get(2, TimeUnit.SECONDS)
+            ExecutionException exception = catchThrowableOfType(
+                    () -> pipeline.search(QUERY).get(2, TimeUnit.SECONDS),
+                    ExecutionException.class
             );
 
-            assertInstanceOf(
-                    AllSourcesUnavailableException.class,
-                    exception.getCause()
-            );
+            assertThat(exception)
+                    .isNotNull()    //additional check - enssure the exception was really caught
+                    .hasCauseInstanceOf(AllSourcesUnavailableException.class);
 
-            AllSourcesUnavailableException cause =
-                    (AllSourcesUnavailableException) exception.getCause();
+            AllSourcesUnavailableException cause = (AllSourcesUnavailableException) exception.getCause();
 
-            assertEquals(3, cause.getErrors().size());
+            assertThat(cause.getErrors()).hasSize(3);
         }
     }
 
@@ -235,7 +217,7 @@ class SearchPipelineTest {
             });
 
             // checks that worker is really started (=> workerStarted.countDown() happened => its latch = 0 => 'await' returns true)
-            assertTrue(workerStarted.await(2, TimeUnit.SECONDS));
+            assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
 
             // Fill the only queue slot (since queue capacity = 1)
             executor.execute(() -> {
@@ -262,27 +244,31 @@ class SearchPipelineTest {
 
             // try to execute the next task and get rejection
             try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout)) {
-                ExecutionException exception = assertThrows(
-                        ExecutionException.class,
-                        () -> pipeline.search(QUERY)
-                                .get(2, TimeUnit.SECONDS)
-                );
+                try {
+                    assertThatThrownBy(() ->
+                            pipeline.search(QUERY).get(2, TimeUnit.SECONDS)
+                    )
+                            .isInstanceOf(ExecutionException.class)
+                            .hasCauseInstanceOf(RejectedExecutionException.class);
+                } finally {
+                    // Что будет, если не вызвать countDown()?
+                    //Рабочий поток останется заблокированным.
+                    // При вызове pipeline.close() метод awaitTermination(terminationTimeout, ...) будет ждать завершения executor до terminationTimeout секунд.
+                    // Затем shutdownNow() попытается прервать поток, но это уже будет нештатный путь завершения теста.
 
-                assertInstanceOf(
-                        RejectedExecutionException.class,
-                        exception.getCause()
-                );
+                    // Лучше освободить поток до закрытия Pipeline
+                    // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeout,
+                    //      пока рабочий поток всё ещё заблокирован на releaseWorker.await().
+                    releaseWorker.countDown();
+                }
             }
 
         } finally {
-            // Что будет, если не вызвать countDown()?
-            //Рабочий поток останется заблокированным.
-            // При вызове pipeline.close() метод awaitTermination(30, ...) будет ждать завершения executor до 30 секунд.
-            // Затем shutdownNow() попытается прервать поток, но это уже будет нештатный путь завершения теста.
+            // На случай ошибки до создания Pipeline.
             releaseWorker.countDown();
 
             executor.shutdownNow();
-            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+            assertThat(executor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
         }
     }
 
@@ -342,20 +328,20 @@ class SearchPipelineTest {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
-            assertTrue(result.isSuccessful());
-            assertTrue(result.errors().isEmpty());
+            assertThat(result.isSuccessful()).isTrue();
+            assertThat(result.errors()).isEmpty();
 
-            assertEquals(2, result.result().products().size());
-            assertEquals(1, result.result().offers().size());
-            assertEquals(1, result.result().reviews().size());
+            assertThat(result.result().products()).hasSize(2);
+            assertThat(result.result().offers()).hasSize(1);
+            assertThat(result.result().reviews()).hasSize(1);
 
             // Проверяем, что обе CPU-стадии выполнялись в нашем executor.
-            assertEquals(2, executedThreads.size());
+            assertThat(executedThreads).hasSize(2);
 
-            assertTrue(executedThreads.stream().allMatch(name -> name.startsWith("search-cpu-")));
+            assertThat(executedThreads.stream().allMatch(name -> name.startsWith("search-cpu-"))).isTrue();
         } finally {
 //            executor.shutdownNow();
-            assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+            assertThat(executor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
         }
     }
 
@@ -398,8 +384,12 @@ class SearchPipelineTest {
             CompletableFuture<SearchResultBox> result = pipeline.search("phone");
 
             // Then
-            assertThatThrownBy(result::join)
-                    .isInstanceOf(CompletionException.class)
+            // Здесь есть два разных сценария:
+            //- Pipeline завершился по своему deadline — получаем ExecutionException с причиной TimeoutException.
+            //- Pipeline не завершился даже за секунду — сам get() выбросит TimeoutException.
+            //Таким образом, тест отличает ожидаемое поведение Pipeline от зависания.
+            assertThatThrownBy(() -> result.get(1, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
                     .hasCauseInstanceOf(TimeoutException.class);
         }
     }
@@ -442,14 +432,27 @@ class SearchPipelineTest {
         assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
 
         try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, Duration.ofMillis(200), terminationTimeout)) {
-            // When
-            CompletableFuture<SearchResultBox> result = pipeline.search("phone");
+            try {
+                // When
+                CompletableFuture<SearchResultBox> result = pipeline.search("phone");
 
-            // Then
-            assertThatThrownBy(result::join)
-                    .isInstanceOf(CompletionException.class)
-                    .hasCauseInstanceOf(TimeoutException.class);
+                // Then
+                // Then
+                // Здесь есть два разных сценария:
+                //- Pipeline завершился по своему deadline — получаем ExecutionException с причиной TimeoutException.
+                //- Pipeline не завершился даже за секунду — сам get() выбросит TimeoutException.
+                //Таким образом, тест отличает ожидаемое поведение Pipeline от зависания.
+                assertThatThrownBy(() -> result.get(1, TimeUnit.SECONDS))
+                        .isInstanceOf(ExecutionException.class)
+                        .hasCauseInstanceOf(TimeoutException.class);
+            } finally {
+                // Лучше освободить поток до закрытия Pipeline
+                // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeout,
+                //      пока рабочий поток всё ещё заблокирован на releaseWorker.await().
+                releaseWorker.countDown();
+            }
         } finally {
+            // На случай ошибки до создания Pipeline.
             releaseWorker.countDown();
             cpuExecutor.shutdownNow();
             assertThat(cpuExecutor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
