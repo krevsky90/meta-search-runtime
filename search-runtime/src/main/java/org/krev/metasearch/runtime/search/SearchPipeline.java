@@ -13,6 +13,7 @@ import org.krev.metasearch.runtime.model.Review;
 import org.krev.metasearch.runtime.model.SearchResult;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.*;
@@ -22,24 +23,37 @@ import java.util.stream.Stream;
 public class SearchPipeline implements AutoCloseable {
     private final SearchSourceClient sourceClient;
     private final ThreadPoolExecutor cpuExecutor;
+    private final Duration requestTimeout;
+    private final long terminationTimeout;
 
     public SearchPipeline(SearchSourceClient sourceClient) {
         this(sourceClient, new ThreadPoolExecutor(
-                8,
-                8,
-                0L,
-                TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(50),
-                new ThreadPoolExecutor.AbortPolicy()
-        ));
+                        8,
+                        8,
+                        0L,
+                        TimeUnit.MILLISECONDS,
+                        new ArrayBlockingQueue<>(50),
+                        new ThreadPoolExecutor.AbortPolicy()
+                ),
+                Duration.ofMillis(500L),
+                30L
+        );
     }
 
     SearchPipeline(
             SearchSourceClient sourceClient,
-            ThreadPoolExecutor cpuExecutor
+            ThreadPoolExecutor cpuExecutor,
+            Duration requestTimeout,
+            long terminationTimeout
     ) {
         this.sourceClient = Objects.requireNonNull(sourceClient);
         this.cpuExecutor = Objects.requireNonNull(cpuExecutor);
+        this.requestTimeout = Objects.requireNonNull(requestTimeout);
+        this.terminationTimeout = Objects.requireNonNull(terminationTimeout);
+
+        if (requestTimeout.isZero() || requestTimeout.isNegative()) {
+            throw new IllegalArgumentException("requestTimeout must be positive");
+        }
     }
 
     // --------------------------------------------------------
@@ -196,6 +210,9 @@ public class SearchPipeline implements AutoCloseable {
     // 7. Main search method
     // --------------------------------------------------------
     public CompletableFuture<SearchResultBox> search(String query) {
+        // NOTE: nanoTime() предназначен для измерения интервалов времени. Он монотонный
+        long deadlineNanos = System.nanoTime() + requestTimeout.toNanos();
+
         // Start all three independent requests.
         CompletableFuture<SearchBox<List<Product>>> products =
                 searchGeneric(
@@ -219,7 +236,6 @@ public class SearchPipeline implements AutoCloseable {
                 );
 
         // Wait until all three futures complete.
-
         return CompletableFuture.allOf(
                         products,
                         offers,
@@ -266,7 +282,8 @@ public class SearchPipeline implements AutoCloseable {
                                         reviewBox
                                 );
                             });
-                });
+                })
+                .orTimeout(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
     }
 
     // --------------------------------------------------------
@@ -276,7 +293,7 @@ public class SearchPipeline implements AutoCloseable {
     public void close() {
         cpuExecutor.shutdown();
         try {
-            if (!cpuExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+            if (!cpuExecutor.awaitTermination(terminationTimeout, TimeUnit.SECONDS)) {
                 cpuExecutor.shutdownNow();
             }
         } catch (InterruptedException ex) {

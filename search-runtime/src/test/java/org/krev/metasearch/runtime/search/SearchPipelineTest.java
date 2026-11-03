@@ -13,9 +13,12 @@ import org.krev.metasearch.runtime.model.Review;
 
 import java.io.IOException;
 import java.net.ConnectException;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -211,6 +214,9 @@ class SearchPipelineTest {
                 new ThreadPoolExecutor.AbortPolicy()
         );
 
+        Duration deadlineTimeout = Duration.ofMillis(500);
+        long terminationTimeout = 5;
+
         //workerStarted	Сообщить тесту, что рабочий поток действительно начал выполнение
         //releaseWorker	Не позволить рабочему потоку завершиться, пока тест этого не разрешит
         CountDownLatch workerStarted = new CountDownLatch(1);
@@ -255,7 +261,7 @@ class SearchPipelineTest {
                     ));
 
             // try to execute the next task and get rejection
-            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor)) {
+            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout)) {
                 ExecutionException exception = assertThrows(
                         ExecutionException.class,
                         () -> pipeline.search(QUERY)
@@ -313,6 +319,8 @@ class SearchPipelineTest {
             }
         };
 
+        Duration deadlineTimeout = Duration.ofMillis(500);
+        long terminationTimeout = 5;
 
         when(sourceClient.searchCatalog(QUERY))
                 .thenReturn(CompletableFuture.completedFuture(
@@ -329,7 +337,7 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor)) {
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout)) {
 
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
@@ -350,4 +358,116 @@ class SearchPipelineTest {
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
         }
     }
+
+    /**
+     * проверка deadline-ов - start
+     */
+
+    // 1. Источник не отвечает — общий deadline
+    // Проверяем:
+    // - Catalog и Offers возвращают результаты.
+    // - Reviews остаётся незавершённым.
+    // - Общий deadline — 200 мс.
+    // - Итоговый future завершается с TimeoutException.
+    @Test
+    void search_shouldTimeout_whenSourceDoesNotRespondBeforeDeadline() {
+        // Given
+        CompletableFuture<List<Product>> catalogFuture = CompletableFuture.completedFuture(List.of(new Product("p1")));
+        CompletableFuture<List<Offer>> offersFuture = CompletableFuture.completedFuture(List.of(new Offer("o1")));
+        CompletableFuture<List<Review>> reviewsFuture = new CompletableFuture<>();  // значит, ничего не отвечает, тупит
+
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogFuture);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersFuture);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsFuture);
+
+        ThreadPoolExecutor cpuExecutor = new ThreadPoolExecutor(
+                2,
+                2,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(50),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
+
+        long terminationTimeout = 5;
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, Duration.ofMillis(200), terminationTimeout)) {
+            // When
+            CompletableFuture<SearchResultBox> result = pipeline.search("phone");
+
+            // Then
+            assertThatThrownBy(result::join)
+                    .isInstanceOf(CompletionException.class)
+                    .hasCauseInstanceOf(TimeoutException.class);
+        }
+    }
+
+    // CPU executor занят — общий deadline
+    // Здесь проверяем важную особенность: даже если все источники ответили мгновенно,
+    //      Pipeline не должен ждать бесконечно, пока освободится CPU executor.
+    //
+    // Займём единственный поток executor и заблокируем его через CountDownLatch.
+    @Test
+    void search_shouldTimeout_whenCpuExecutorIsBusy() throws InterruptedException {
+        // Given
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        when(sourceClient.searchCatalog(anyString()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(new Product("p1"))));
+
+        when(sourceClient.searchOffers(anyString()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(new Offer("o1"))));
+
+        when(sourceClient.searchReviews(anyString()))
+                .thenReturn(CompletableFuture.completedFuture(List.of(new Review("r1"))));
+
+        ThreadPoolExecutor cpuExecutor = createSingleThreadCpuExecutor();
+        long terminationTimeout = 5;
+
+        CountDownLatch workerStarted = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+
+        cpuExecutor.execute(() -> {
+            workerStarted.countDown();
+
+            try {
+                releaseWorker.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, Duration.ofMillis(200), terminationTimeout)) {
+            // When
+            CompletableFuture<SearchResultBox> result = pipeline.search("phone");
+
+            // Then
+            assertThatThrownBy(result::join)
+                    .isInstanceOf(CompletionException.class)
+                    .hasCauseInstanceOf(TimeoutException.class);
+        } finally {
+            releaseWorker.countDown();
+            cpuExecutor.shutdownNow();
+            assertThat(cpuExecutor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    private ThreadPoolExecutor createSingleThreadCpuExecutor() {
+        return new ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(50),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
+
+    /**
+     * проверка deadline-ов - end
+     */
 }
