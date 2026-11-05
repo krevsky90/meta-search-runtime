@@ -285,13 +285,13 @@ public class SearchPipeline implements AutoCloseable {
     // --------------------------------------------------------
     // 5. Product processing
     // --------------------------------------------------------
-    private List<Product> filterProducts(List<Product> products) {
+    List<Product> filterProducts(List<Product> products) {
         System.out.println("filterProducts: " + Thread.currentThread().getName());
         // TODO: implement filtering
         return products;
     }
 
-    private List<Product> rankProducts(List<Product> products) {
+    List<Product> rankProducts(List<Product> products) {
         System.out.println("rankProducts: " + Thread.currentThread().getName());
         // TODO: implement ranking
         return products;
