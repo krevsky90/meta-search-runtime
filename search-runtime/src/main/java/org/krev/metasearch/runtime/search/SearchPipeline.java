@@ -2,6 +2,7 @@ package org.krev.metasearch.runtime.search;
 
 import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
+import org.krev.metasearch.runtime.exceptions.InvalidInputProcessingException;
 import org.krev.metasearch.runtime.exceptions.InvalidSourceResponseException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
 import org.krev.metasearch.runtime.model.Offer;
@@ -121,6 +122,68 @@ public class SearchPipeline implements AutoCloseable {
     }
 
     // --------------------------------------------------------
+    // 1.2 Normalize individual processing result
+    // --------------------------------------------------------
+    private <T> CompletableFuture<ProcessingBox<List<T>>> processingGeneric(
+            Function<List<T>, List<T>> processingFunction,
+            List<T> input,
+            List<T> fallback,
+            ProcessingStage stage
+    ) {
+        try {
+            CompletableFuture<List<T>> processingFuture = CompletableFuture.supplyAsync(
+                    () -> processingFunction.apply(input),
+                    cpuExecutor
+            );
+
+            return processingFuture.handle((result, ex) -> {
+                if (ex != null) {
+                    return new ProcessingBox<>(
+                            fallback,
+                            toProcessingError(stage, ex)
+                    );
+                }
+
+                if (result == null) {
+                    return new ProcessingBox<>(
+                            fallback,
+                            toProcessingError(
+                                    stage,
+                                    new InvalidInputProcessingException("Processing returned null result")
+                            )
+                    );
+                }
+
+                try {
+                    return new ProcessingBox<>(
+                            List.copyOf(result),    // might throw NPE
+                            null
+                    );
+                } catch (RuntimeException validationError) {
+                    return new ProcessingBox<>(
+                            fallback,
+                            toProcessingError(
+                                    stage,
+                                    new InvalidInputProcessingException("Invalid processing result", validationError)
+                            )
+                    );
+                }
+            });
+
+        } catch (RuntimeException ex) {
+            // Handle synchronous exception thrown before a future is returned.
+            // For example, RejectedExecutionException
+            return CompletableFuture.completedFuture(
+                    new ProcessingBox<>(
+                            fallback,
+                            toProcessingError(stage, ex)
+                    )
+            );
+        }
+    }
+
+
+    // --------------------------------------------------------
     // 2. Error handling
     // --------------------------------------------------------
     private Throwable unwrap(Throwable ex) {
@@ -156,6 +219,27 @@ public class SearchPipeline implements AutoCloseable {
         return ErrorCode.INTERNAL_ERROR;
     }
 
+    private ProcessingError toProcessingError(ProcessingStage stage, Throwable ex) {
+        Throwable cause = unwrap(ex);
+        return new ProcessingError(
+                stage,
+                retrieveProcessingErrorCode(cause),
+                cause.getMessage()
+        );
+    }
+
+    private ProcessingErrorCode retrieveProcessingErrorCode(Throwable ex) {
+        if (ex instanceof TimeoutException) {
+            return ProcessingErrorCode.TIMEOUT;
+        }
+
+        if (ex instanceof InvalidInputProcessingException) {
+            return ProcessingErrorCode.INVALID_INPUT;
+        }
+
+        return ProcessingErrorCode.INTERNAL_ERROR;
+    }
+
     // --------------------------------------------------------
     // 3. Check source availability
     // --------------------------------------------------------
@@ -176,7 +260,24 @@ public class SearchPipeline implements AutoCloseable {
             SearchBox<List<Offer>> offers,
             SearchBox<List<Review>> reviews
     ) {
-        return Stream.of(products.error(), offers.error(), reviews.error())
+        return Stream.of(
+                        products.error(),
+                        offers.error(),
+                        reviews.error()
+                )
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    // --------------------------------------------------------
+    // 4.2 Collect processing errors
+    // --------------------------------------------------------
+    private List<ProcessingError> collectProcessingErrors(
+            ProcessingBox<List<Product>> products
+    ) {
+        return Stream.of(
+                        products.error()
+                )
                 .filter(Objects::nonNull)
                 .toList();
     }
@@ -200,7 +301,8 @@ public class SearchPipeline implements AutoCloseable {
     // 6. Combine partial results
     // --------------------------------------------------------
     private SearchResultBox combine(
-            SearchBox<List<Product>> products,
+            SearchBox<List<Product>> productsSourceBox,
+            ProcessingBox<List<Product>> products,
             SearchBox<List<Offer>> offers,
             SearchBox<List<Review>> reviews
     ) {
@@ -210,8 +312,10 @@ public class SearchPipeline implements AutoCloseable {
                 reviews.data()
         );
 
-        List<SourceError> errors = collectErrors(products, offers, reviews);
-        return new SearchResultBox(result, errors);
+        List<SourceError> errors = collectErrors(productsSourceBox, offers, reviews);
+        List<ProcessingError> processingErrors = collectProcessingErrors(products);
+
+        return new SearchResultBox(result, errors, processingErrors);
     }
 
     // --------------------------------------------------------
@@ -253,53 +357,73 @@ public class SearchPipeline implements AutoCloseable {
                         reviews
                 )
                 .thenCompose(unused -> {
-                    // All futures have completed. join() does not block here.
-                    SearchBox<List<Product>> productBox = products.join();
-                    SearchBox<List<Offer>> offerBox = offers.join();
-                    SearchBox<List<Review>> reviewBox = reviews.join();
+                            // All futures have completed. join() does not block here.
+                            SearchBox<List<Product>> productBox = products.join();
+                            SearchBox<List<Offer>> offerBox = offers.join();
+                            SearchBox<List<Review>> reviewBox = reviews.join();
 
-                    // If every source failed, fail the entire pipeline.
-                    if (allSourcesFailed(productBox, offerBox, reviewBox)) {
-                        return CompletableFuture.failedFuture(
-                                new AllSourcesUnavailableException(
-                                        collectErrors(
-                                                productBox,
-                                                offerBox,
-                                                reviewBox
+                            // If every source failed, fail the entire pipeline.
+                            if (allSourcesFailed(productBox, offerBox, reviewBox)) {
+                                return CompletableFuture.failedFuture(
+                                        new AllSourcesUnavailableException(
+                                                collectErrors(
+                                                        productBox,
+                                                        offerBox,
+                                                        reviewBox
+                                                )
                                         )
-                                )
-                        );
-                    }
-
-                    // Filter and rank products on the dedicated executor.
-                    return CompletableFuture.supplyAsync(
-                                    () -> filterProducts(productBox.data()),
-                                    cpuExecutor
-                            )
-                            .thenApplyAsync(
-                                    this::rankProducts,
-                                    cpuExecutor
-                            )
-                            .thenApply(rankedProducts -> {
-                                SearchBox<List<Product>> rankedProductBox =
-                                        new SearchBox<>(
-                                                rankedProducts,
-                                                productBox.error()
-                                        );
-
-                                return combine(
-                                        rankedProductBox,
-                                        offerBox,
-                                        reviewBox
                                 );
-                            });
-                })
+                            }
+
+                            // If catalog failed, skip product processing.
+                            if (!productBox.isSuccessful()) {
+                                ProcessingBox<List<Product>> processingBox = new ProcessingBox<>(List.of(), null);
+                                return CompletableFuture.completedFuture(
+                                        combine(productBox, processingBox, offerBox, reviewBox)
+                                );
+                            }
+
+                            // 1. filtering
+                            CompletableFuture<ProcessingBox<List<Product>>> filteredProducts =
+                                    processingGeneric(this::filterProducts,
+                                            productBox.data(),
+                                            List.of(),
+                                            ProcessingStage.FILTER_PRODUCTS
+                                    );
+
+
+                            //2. ranking
+                            CompletableFuture<ProcessingBox<List<Product>>> rankedProducts =
+                                    filteredProducts.thenCompose(filterBox -> {
+                                        // If filtering failed, skip ranking.
+                                        if (!filterBox.isSuccessful()) {
+                                            return CompletableFuture.completedFuture(filterBox);
+                                        }
+
+                                        return processingGeneric(this::rankProducts,
+                                                filterBox.data(),
+                                                filterBox.data(),
+                                                ProcessingStage.RANK_PRODUCTS
+                                        );
+                                    });
+
+                            // 3. Combine
+                            return rankedProducts.thenApply(rankedBox ->
+                                    combine(
+                                            productBox,
+                                            rankedBox,
+                                            offerBox,
+                                            reviewBox
+                                    )
+                            );
+                        }
+                )
                 .orTimeout(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
     }
 
     // --------------------------------------------------------
-    // 8. Executor lifecycle
-    // --------------------------------------------------------
+// 8. Executor lifecycle
+// --------------------------------------------------------
     @Override
     public void close() {
         cpuExecutor.shutdown();

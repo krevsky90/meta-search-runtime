@@ -7,14 +7,17 @@ import java.util.Objects;
 
 public record SearchResultBox(
         SearchResult result,
-        List<SourceError> errors
+        List<SourceError> errors,
+        List<ProcessingError> processingErrors
 ) {
     public SearchResultBox {
         Objects.requireNonNull(result);
+
         errors = errors == null ? List.of() : List.copyOf(errors);
+        processingErrors = processingErrors == null ? List.of() : List.copyOf(processingErrors);
     }
 
     public boolean isSuccessful() {
-        return errors.isEmpty();
+        return errors.isEmpty() &&  processingErrors.isEmpty();
     }
 }
