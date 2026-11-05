@@ -1,9 +1,6 @@
 package org.krev.metasearch.runtime.search;
 
-import org.krev.metasearch.runtime.error_model.ErrorCode;
-import org.krev.metasearch.runtime.error_model.SearchBox;
-import org.krev.metasearch.runtime.error_model.SearchResultBox;
-import org.krev.metasearch.runtime.error_model.SourceError;
+import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.exceptions.InvalidSourceResponseException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -25,8 +22,9 @@ public class SearchPipeline implements AutoCloseable {
     private final ThreadPoolExecutor cpuExecutor;
     private final Duration requestTimeout;
     private final long terminationTimeout;
+    private final SourceTimeouts sourceTimeouts;
 
-    public SearchPipeline(SearchSourceClient sourceClient) {
+    public SearchPipeline(SearchSourceClient sourceClient, SourceTimeouts sourceTimeouts) {
         this(sourceClient, new ThreadPoolExecutor(
                         8,
                         8,
@@ -36,7 +34,8 @@ public class SearchPipeline implements AutoCloseable {
                         new ThreadPoolExecutor.AbortPolicy()
                 ),
                 Duration.ofMillis(500L),
-                30L
+                30L,
+                sourceTimeouts
         );
     }
 
@@ -44,15 +43,21 @@ public class SearchPipeline implements AutoCloseable {
             SearchSourceClient sourceClient,
             ThreadPoolExecutor cpuExecutor,
             Duration requestTimeout,
-            long terminationTimeout
+            long terminationTimeout,
+            SourceTimeouts sourceTimeouts
     ) {
         this.sourceClient = Objects.requireNonNull(sourceClient);
         this.cpuExecutor = Objects.requireNonNull(cpuExecutor);
         this.requestTimeout = Objects.requireNonNull(requestTimeout);
-        this.terminationTimeout = Objects.requireNonNull(terminationTimeout);
+        this.terminationTimeout = terminationTimeout;
+        this.sourceTimeouts = Objects.requireNonNull(sourceTimeouts);
 
         if (requestTimeout.isZero() || requestTimeout.isNegative()) {
             throw new IllegalArgumentException("requestTimeout must be positive");
+        }
+
+        if (terminationTimeout < 0) {
+            throw new IllegalArgumentException("terminationTimeout must not be negative");
         }
     }
 
@@ -63,10 +68,13 @@ public class SearchPipeline implements AutoCloseable {
     private <T> CompletableFuture<SearchBox<List<T>>> searchGeneric(
             Function<String, CompletableFuture<List<T>>> searchFunction,
             String query,
-            String source
+            String source,
+            Duration timeout
     ) {
         try {
-            CompletableFuture<List<T>> sourceFuture = Objects.requireNonNull(searchFunction.apply(query));
+            CompletableFuture<List<T>> sourceFuture = Objects.requireNonNull(searchFunction.apply(query))
+                    .thenApply(Function.identity())
+                    .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
             return sourceFuture.handle((result, ex) -> {
                 if (ex != null) {
                     return new SearchBox<>(
@@ -218,21 +226,24 @@ public class SearchPipeline implements AutoCloseable {
                 searchGeneric(
                         sourceClient::searchCatalog,
                         query,
-                        "catalog"
+                        "catalog",
+                        sourceTimeouts.catalog()
                 );
 
         CompletableFuture<SearchBox<List<Offer>>> offers =
                 searchGeneric(
                         sourceClient::searchOffers,
                         query,
-                        "offers"
+                        "offers",
+                        sourceTimeouts.offers()
                 );
 
         CompletableFuture<SearchBox<List<Review>>> reviews =
                 searchGeneric(
                         sourceClient::searchReviews,
                         query,
-                        "reviews"
+                        "reviews",
+                        sourceTimeouts.reviews()
                 );
 
         // Wait until all three futures complete.

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.krev.metasearch.runtime.error_model.ErrorCode;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceError;
+import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
 import org.krev.metasearch.runtime.model.Offer;
@@ -48,7 +49,13 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient)) {
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
 
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
@@ -82,7 +89,13 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient)) {
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
@@ -94,8 +107,8 @@ class SearchPipelineTest {
 
             assertThat(result.errors()).hasSize(1);
 
-            assertThat(result.errors().getFirst().source()).isEqualTo("catalog");
-            assertThat(ErrorCode.CONNECTION_FAILED).isEqualTo(result.errors().getFirst().code());
+            assertThat(result.errors()).extracting(SourceError::source).containsExactlyInAnyOrder("catalog");
+            assertThat(result.errors().getFirst().code()).isEqualTo(ErrorCode.CONNECTION_FAILED);
         }
     }
 
@@ -121,7 +134,13 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient)) {
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
@@ -135,11 +154,11 @@ class SearchPipelineTest {
 
             assertThat(result.errors())
                     .extracting(SourceError::source)
-                    .containsExactly("catalog", "offers");
+                    .containsExactlyInAnyOrder("catalog", "offers");
 
             assertThat(result.errors())
                     .extracting(SourceError::code)
-                    .containsExactly(ErrorCode.CONNECTION_FAILED, ErrorCode.TIMEOUT);
+                    .containsExactlyInAnyOrder(ErrorCode.CONNECTION_FAILED, ErrorCode.TIMEOUT);
         }
     }
 
@@ -148,7 +167,7 @@ class SearchPipelineTest {
     // --------------------------------------------------------
 
     @Test
-    void allSourcesFailed() {
+    void allSourcesFailedWithDifferentErrors() {
         when(sourceClient.searchCatalog(QUERY))
                 .thenReturn(CompletableFuture.failedFuture(
                         new ConnectException("Catalog unavailable")
@@ -164,7 +183,13 @@ class SearchPipelineTest {
                         new IOException("Reviews unavailable")
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient)) {
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
 
             ExecutionException exception = catchThrowableOfType(
                     () -> pipeline.search(QUERY).get(2, TimeUnit.SECONDS),
@@ -172,12 +197,22 @@ class SearchPipelineTest {
             );
 
             assertThat(exception)
-                    .isNotNull()    //additional check - enssure the exception was really caught
+                    .isNotNull()    //additional check - ensure the exception was really caught
                     .hasCauseInstanceOf(AllSourcesUnavailableException.class);
 
             AllSourcesUnavailableException cause = (AllSourcesUnavailableException) exception.getCause();
 
-            assertThat(cause.getErrors()).hasSize(3);
+            assertThat(cause.getErrors())
+                    .extracting(SourceError::source)
+                    .containsExactly("catalog", "offers", "reviews");
+
+            assertThat(cause.getErrors())
+                    .extracting(SourceError::code)
+                    .containsExactlyInAnyOrder(
+                            ErrorCode.CONNECTION_FAILED,
+                            ErrorCode.TIMEOUT,
+                            ErrorCode.CONNECTION_FAILED
+                    );
         }
     }
 
@@ -242,8 +277,14 @@ class SearchPipelineTest {
                             List.of(new Review("r1"))
                     ));
 
+            SourceTimeouts sourceTimeouts = new SourceTimeouts(
+                    Duration.ofSeconds(1),
+                    Duration.ofSeconds(1),
+                    Duration.ofSeconds(1)
+            );
+
             // try to execute the next task and get rejection
-            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout)) {
+            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
                 try {
                     assertThatThrownBy(() ->
                             pipeline.search(QUERY).get(2, TimeUnit.SECONDS)
@@ -280,7 +321,7 @@ class SearchPipelineTest {
     // --------------------------------------------------------
 
     @Test
-    void checkExecutorPool() throws Exception {
+    void cpuStages_shouldExecuteOnProvidedExecutor() throws Exception {
         ConcurrentLinkedQueue<String> executedThreads = new ConcurrentLinkedQueue<>();
 
         ThreadFactory threadFactory = runnable -> {
@@ -308,6 +349,12 @@ class SearchPipelineTest {
         Duration deadlineTimeout = Duration.ofMillis(500);
         long terminationTimeout = 5;
 
+        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+                Duration.ofMillis(300),
+                Duration.ofMillis(300),
+                Duration.ofMillis(300)
+        );
+
         when(sourceClient.searchCatalog(QUERY))
                 .thenReturn(CompletableFuture.completedFuture(
                         List.of(new Product("p1"), new Product("p2"))
@@ -323,7 +370,7 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                 ));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout)) {
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
 
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
@@ -353,7 +400,7 @@ class SearchPipelineTest {
     // Проверяем:
     // - Catalog и Offers возвращают результаты.
     // - Reviews остаётся незавершённым.
-    // - Общий deadline — 200 мс.
+    // - Общий deadline — 500 мс.
     // - Итоговый future завершается с TimeoutException.
     @Test
     void search_shouldTimeout_whenSourceDoesNotRespondBeforeDeadline() {
@@ -377,9 +424,16 @@ class SearchPipelineTest {
                 new ThreadPoolExecutor.AbortPolicy()
         );
 
+        Duration deadlineTimeout = Duration.ofMillis(500);
         long terminationTimeout = 5;
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, Duration.ofMillis(200), terminationTimeout)) {
+        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+                Duration.ofMillis(1000),
+                Duration.ofMillis(1000),
+                Duration.ofMillis(1000)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
             // When
             CompletableFuture<SearchResultBox> result = pipeline.search("phone");
 
@@ -388,7 +442,7 @@ class SearchPipelineTest {
             //- Pipeline завершился по своему deadline — получаем ExecutionException с причиной TimeoutException.
             //- Pipeline не завершился даже за секунду — сам get() выбросит TimeoutException.
             //Таким образом, тест отличает ожидаемое поведение Pipeline от зависания.
-            assertThatThrownBy(() -> result.get(1, TimeUnit.SECONDS))
+            assertThatThrownBy(() -> result.get(2, TimeUnit.SECONDS))
                     .isInstanceOf(ExecutionException.class)
                     .hasCauseInstanceOf(TimeoutException.class);
         }
@@ -414,7 +468,15 @@ class SearchPipelineTest {
                 .thenReturn(CompletableFuture.completedFuture(List.of(new Review("r1"))));
 
         ThreadPoolExecutor cpuExecutor = createSingleThreadCpuExecutor();
+
+        Duration deadlineTimeout = Duration.ofMillis(500);
         long terminationTimeout = 5;
+
+        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+                Duration.ofMillis(300),
+                Duration.ofMillis(300),
+                Duration.ofMillis(300)
+        );
 
         CountDownLatch workerStarted = new CountDownLatch(1);
         CountDownLatch releaseWorker = new CountDownLatch(1);
@@ -431,12 +493,11 @@ class SearchPipelineTest {
 
         assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, Duration.ofMillis(200), terminationTimeout)) {
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
             try {
                 // When
                 CompletableFuture<SearchResultBox> result = pipeline.search("phone");
 
-                // Then
                 // Then
                 // Здесь есть два разных сценария:
                 //- Pipeline завершился по своему deadline — получаем ExecutionException с причиной TimeoutException.
@@ -450,9 +511,10 @@ class SearchPipelineTest {
                 // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeout,
                 //      пока рабочий поток всё ещё заблокирован на releaseWorker.await().
                 releaseWorker.countDown();
+                workerStarted.countDown();
             }
         } finally {
-            // На случай ошибки до создания Pipeline.
+            // внешний finally страхует ситуацию, когда ошибка возникла ещё до создания Pipeline.
             releaseWorker.countDown();
             cpuExecutor.shutdownNow();
             assertThat(cpuExecutor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
@@ -472,5 +534,164 @@ class SearchPipelineTest {
 
     /**
      * проверка deadline-ов - end
+     */
+
+    /**
+     * проверка timeout-ов отдельных источников - start
+     */
+    // Catalog timeout
+    @Test
+    void search_shouldReturnPartialResult_whenCatalogTimesOut() throws Exception {
+        // given
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        List<Offer> offers = List.of(new Offer("offer-1"));
+        List<Review> reviews = List.of(new Review("review-1"));
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchOffers(anyString())).thenReturn(CompletableFuture.completedFuture(offers));
+        when(sourceClient.searchReviews(anyString())).thenReturn(CompletableFuture.completedFuture(reviews));
+
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofMillis(100),
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+            // when
+            SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
+
+            // then
+            assertThat(result.result().products()).isEmpty();
+            assertThat(result.result().offers()).containsExactlyElementsOf(offers);
+            assertThat(result.result().reviews()).containsExactlyElementsOf(reviews);
+
+            assertThat(result.errors())
+                    .singleElement()
+                    .satisfies(error -> {
+                        assertThat(error.source()).isEqualTo("catalog");
+                        assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
+                    });
+        }
+    }
+
+    // Offers timeout
+    @Test
+    void search_shouldReturnPartialResult_whenOffersTimesOut() throws Exception {
+        // given
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        List<Product> products = List.of(new Product("product-1"));
+        List<Review> reviews = List.of(new Review("review-1"));
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(CompletableFuture.completedFuture(products));
+        when(sourceClient.searchOffers(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchReviews(anyString())).thenReturn(CompletableFuture.completedFuture(reviews));
+
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(2),
+                Duration.ofMillis(100),
+                Duration.ofSeconds(2)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+            // when
+            SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
+
+            // then
+            assertThat(result.result().products()).containsExactlyElementsOf(products);
+            assertThat(result.result().offers()).isEmpty();
+            assertThat(result.result().reviews()).containsExactlyElementsOf(reviews);
+
+            assertThat(result.errors())
+                    .singleElement()
+                    .satisfies(error -> {
+                        assertThat(error.source()).isEqualTo("offers");
+                        assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
+                    });
+        }
+    }
+
+    // Review timeout
+    @Test
+    void search_shouldReturnPartialResult_whenReviewsTimesOut() throws Exception {
+        // given
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        List<Product> products = List.of(new Product("product-1"));
+        List<Offer> offers = List.of(new Offer("offer-1"));
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(CompletableFuture.completedFuture(products));
+        when(sourceClient.searchOffers(anyString())).thenReturn(CompletableFuture.completedFuture(offers));
+        when(sourceClient.searchReviews(anyString())).thenReturn(new CompletableFuture<>());
+
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                Duration.ofMillis(100)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+            // when
+            SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
+
+            // then
+            assertThat(result.result().products()).containsExactlyElementsOf(products);
+            assertThat(result.result().offers()).containsExactlyElementsOf(offers);
+            assertThat(result.result().reviews()).isEmpty();
+
+            assertThat(result.errors())
+                    .singleElement()
+                    .satisfies(error -> {
+                        assertThat(error.source()).isEqualTo("reviews");
+                        assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
+                    });
+        }
+    }
+
+    @Test
+    void search_shouldFail_whenAllSourcesTimeout() throws Exception {
+        // given
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchOffers(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchReviews(anyString())).thenReturn(new CompletableFuture<>());
+
+        SourceTimeouts timeouts = new SourceTimeouts(
+                Duration.ofMillis(100),
+                Duration.ofMillis(100),
+                Duration.ofMillis(100)
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+            // when
+            ExecutionException exception = catchThrowableOfType(
+                    () -> pipeline.search("phone").get(1, TimeUnit.SECONDS),
+                    ExecutionException.class
+            );
+
+            // then
+            assertThat(exception)
+                    .isNotNull()
+                    .hasCauseInstanceOf(AllSourcesUnavailableException.class);
+
+            AllSourcesUnavailableException cause = (AllSourcesUnavailableException) exception.getCause();
+
+            assertThat(cause.getErrors()).hasSize(3);
+
+            assertThat(cause.getErrors())
+                    .extracting(SourceError::source)
+                    .containsExactlyInAnyOrder("catalog", "offers", "reviews");
+
+            assertThat(cause.getErrors())
+                    .extracting(SourceError::code)
+                    .containsOnly(ErrorCode.TIMEOUT);
+        }
+    }
+
+    /**
+     * проверка timeout-ов отдельных источников - end
      */
 }

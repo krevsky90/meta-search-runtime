@@ -21,4 +21,15 @@ thenCombineAsync(other, fn, executor)	Переданный executor
 
 orTimeout меняет (относится) к тому CompletableFuture, у которого он вызван. Сейчас это allOf результат, и это нас устраивает.
 И еще: orTimeout НЕ останавливает выполнение потока, который превысил время ожидания, а просто перестает его ждать!
+И еще: timeout не ограничивает синхронный вызов клиента.
+    searchFunction.apply(query) происходит синхронно.
+    Если реализация searchCatalog() зависнет на 2 секунды, прежде чем вернуть CompletableFuture, индивидуальный timeout в 200 мс не поможет.
 
+---------
+Прием, как не менять исходный future, но навесить timeout на его "копию":
+    идея - дописать .thenApply(Function.identity())
+    Пример:
+        CompletableFuture<List<Product>> timedFuture =
+                sourceFuture
+                        .thenApply(Function.identity())
+                        .orTimeout(400, TimeUnit.MILLISECONDS);
