@@ -128,58 +128,90 @@ public class SearchPipeline implements AutoCloseable {
             Function<List<T>, List<T>> processingFunction,
             List<T> input,
             List<T> fallback,
-            ProcessingStage stage
+            ProcessingStage stage,
+            CancellationContext cancellationContext
     ) {
-        try {
-            CompletableFuture<List<T>> processingFuture = CompletableFuture.supplyAsync(
-                    () -> processingFunction.apply(input),
-                    cpuExecutor
-            );
-
-            return processingFuture.handle((result, ex) -> {
-                if (ex != null) {
-                    return new ProcessingBox<>(
-                            fallback,
-                            toProcessingError(stage, ex)
-                    );
-                }
-
-                if (result == null) {
-                    return new ProcessingBox<>(
-                            fallback,
-                            toProcessingError(
-                                    stage,
-                                    new InvalidInputProcessingException("Processing returned null result")
-                            )
-                    );
-                }
-
+        CompletableFuture<List<T>> cf = new CompletableFuture<>();
+        FutureTask<List<T>> ft = new FutureTask<>(() -> processingFunction.apply(input)) {
+            // done() вызывается самим FutureTask в ЛЮБОМ СЛУЧАЕ после того, как он завершился: успешно, с исключением или отменой.
+            // Поэтому get() уже не ожидает выполнения задачи, а сразу возвращает результат или выбрасывает исключение.
+            @Override
+            protected void done() {
                 try {
-                    return new ProcessingBox<>(
-                            List.copyOf(result),    // might throw NPE
-                            null
-                    );
-                } catch (RuntimeException validationError) {
-                    return new ProcessingBox<>(
-                            fallback,
-                            toProcessingError(
-                                    stage,
-                                    new InvalidInputProcessingException("Invalid processing result", validationError)
-                            )
-                    );
+                    cf.complete(get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    cf.completeExceptionally(e);
+                } catch (ExecutionException e) {
+                    cf.completeExceptionally(e.getCause());
+                } catch (CancellationException e) {
+                    cf.cancel(false);
                 }
-            });
+            }
+        };
 
-        } catch (RuntimeException ex) {
-            // Handle synchronous exception thrown before a future is returned.
-            // For example, RejectedExecutionException
-            return CompletableFuture.completedFuture(
-                    new ProcessingBox<>(
-                            fallback,
-                            toProcessingError(stage, ex)
-                    )
-            );
+        CompletableFuture<ProcessingBox<List<T>>> finalCf =
+                cf.handle((result, ex) -> {
+                    cancellationContext.unregister(ft, cf);
+
+                    Throwable cause = unwrap(ex);
+
+                    if (cause instanceof CancellationException cancellationException) {
+                        throw cancellationException;
+                    }
+
+                    if (ex != null) {
+                        return new ProcessingBox<>(
+                                fallback,
+                                toProcessingError(stage, cause)
+                        );
+                    }
+
+                    if (result == null) {
+                        return new ProcessingBox<>(
+                                fallback,
+                                toProcessingError(
+                                        stage,
+                                        new InvalidInputProcessingException("Processing returned null result")
+                                )
+                        );
+                    }
+
+                    try {
+                        return new ProcessingBox<>(
+                                List.copyOf(result),    // might throw NPE
+                                null
+                        );
+                    } catch (RuntimeException validationError) {
+                        return new ProcessingBox<>(
+                                fallback,
+                                toProcessingError(
+                                        stage,
+                                        new InvalidInputProcessingException("Invalid processing result", validationError)
+                                )
+                        );
+                    }
+                });
+
+
+        boolean register = cancellationContext.register(ft, cf);
+        if (register) {
+            // 'register = true' means context is NOT cancelled => we should process this task
+            try {
+                cpuExecutor.execute(ft);
+            } catch (RejectedExecutionException ex) {
+                // Handle synchronous exception thrown before a future is returned.
+                // For example, RejectedExecutionException
+                // + unregister(ft, cf). NOTE: if we do not do that and cpuExecutor throws Exception =>
+                //      cancellationContext.unregister(ft, cf); won't be executed in handle =>
+                //      cancellationContext will grow => memory leak!
+                cancellationContext.unregister(ft, cf);
+
+                cf.completeExceptionally(ex);
+            }
         }
+
+        return finalCf;
     }
 
 
@@ -322,6 +354,9 @@ public class SearchPipeline implements AutoCloseable {
     // 7. Main search method
     // --------------------------------------------------------
     public CompletableFuture<SearchResultBox> search(String query) {
+        // 1 query -> 1 context
+        CancellationContext cancellationContext = new CancellationContext();
+
         // NOTE: nanoTime() предназначен для измерения интервалов времени. Он монотонный
         long deadlineNanos = System.nanoTime() + requestTimeout.toNanos();
 
@@ -351,7 +386,7 @@ public class SearchPipeline implements AutoCloseable {
                 );
 
         // Wait until all three futures complete.
-        return CompletableFuture.allOf(
+        CompletableFuture<SearchResultBox> result = CompletableFuture.allOf(
                         products,
                         offers,
                         reviews
@@ -388,7 +423,8 @@ public class SearchPipeline implements AutoCloseable {
                                     processingGeneric(this::filterProducts,
                                             productBox.data(),
                                             List.of(),
-                                            ProcessingStage.FILTER_PRODUCTS
+                                            ProcessingStage.FILTER_PRODUCTS,
+                                            cancellationContext
                                     );
 
 
@@ -403,7 +439,8 @@ public class SearchPipeline implements AutoCloseable {
                                         return processingGeneric(this::rankProducts,
                                                 filterBox.data(),
                                                 filterBox.data(),
-                                                ProcessingStage.RANK_PRODUCTS
+                                                ProcessingStage.RANK_PRODUCTS,
+                                                cancellationContext
                                         );
                                     });
 
@@ -419,6 +456,17 @@ public class SearchPipeline implements AutoCloseable {
                         }
                 )
                 .orTimeout(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+
+        // NOTE: whenComplete created NEW CompletableFuture => we should return 'result' Cf, but not Cf that was created by whenComplete.
+        // otherwise 'cancel' by user side will cancel whenComplete's Cf, but not 'result' Cf !!!
+        result.whenComplete((searchResultBox, ex) -> {
+            Throwable cause = unwrap(ex);
+            if (cause instanceof TimeoutException || cause instanceof CancellationException) {
+                cancellationContext.cancel();
+            }
+        });
+
+        return result;
     }
 
     // --------------------------------------------------------
