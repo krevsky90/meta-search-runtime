@@ -125,4 +125,96 @@ class SearchPipelineCancellationRaceTest {
             return submittedTasks.peek();
         }
     }
+
+    /**
+     * здесь важно не требовать конкретного победителя гонки. Возможны два корректных исхода:
+     * - FutureTask успела завершиться, и результат успел попасть в CompletableFuture.
+     * - Отмена успела первой, и CompletableFuture перешёл в cancelled state.
+     *
+     * NOTE:
+     * FutureTask может уже завершиться успешно, но CancellationContext ещё успеет отменить связанный с ней CompletableFuture,
+     *      прежде чем callback done() передаст туда результат.
+     * Поэтому нельзя проверять только соответствие task.isCancelled() и result.isCancelled().
+     *
+     * NOTE:
+     * однократный запуск не гарантирует, что планировщик действительно воспроизведёт оба порядка выполнения.
+     * Он проверяет корректность при конкурентном старте, но не является доказательством всех возможных interleaving.
+     * Для MVP это полезный regression test; при желании позже можно добавить многократный stress test.
+     */
+    @Test
+    void shouldHandleRaceBetweenTaskCompletionAndCancellation() throws Exception {
+        CancellationContext context = new CancellationContext();
+
+        CompletableFuture<Integer> result = new CompletableFuture<>();
+
+        FutureTask<Integer> task = new FutureTask<>(() -> 42) {
+            @Override
+            protected void done() {
+                try {
+                    result.complete(get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result.completeExceptionally(e);
+                } catch (ExecutionException e) {
+                    result.completeExceptionally(e.getCause());
+                } catch (CancellationException e) {
+                    result.cancel(false);
+                }
+            }
+        };
+
+        assertThat(context.register(task, result)).isTrue();
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        ExecutorService raceExecutor = Executors.newFixedThreadPool(2);
+
+        try {
+            Future<?> completion = raceExecutor.submit(() -> {
+                ready.countDown();
+                start.await();
+
+                task.run();
+
+                return null;
+            });
+
+            Future<?> cancellation = raceExecutor.submit(() -> {
+                ready.countDown();
+                start.await();
+
+                context.cancel();
+
+                return null;
+            });
+
+            // Both threads are ready to race.
+            assertThat(ready.await(2, TimeUnit.SECONDS)).isTrue();
+
+            // Allow both operations to start.
+            start.countDown();
+
+            completion.get(2, TimeUnit.SECONDS);
+            cancellation.get(2, TimeUnit.SECONDS);
+
+            assertThat(context.isCancelled()).isTrue();
+
+            // Both objects must reach a terminal state.
+            assertThat(task.isDone()).isTrue();
+            assertThat(result.isDone()).isTrue();
+
+            // Either the result wins or cancellation wins.
+            if (result.isCancelled()) {
+                assertThat(result.isCompletedExceptionally()).isTrue();
+            } else {
+                assertThat(result.join()).isEqualTo(42);
+            }
+        } finally {
+            start.countDown();
+
+            raceExecutor.shutdownNow();
+            assertThat(raceExecutor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
+        }
+    }
 }
