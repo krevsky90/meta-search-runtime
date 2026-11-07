@@ -2,10 +2,7 @@
 package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
-import org.krev.metasearch.runtime.error_model.ErrorCode;
-import org.krev.metasearch.runtime.error_model.SearchResultBox;
-import org.krev.metasearch.runtime.error_model.SourceError;
-import org.krev.metasearch.runtime.error_model.SourceTimeouts;
+import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
 import org.krev.metasearch.runtime.model.Offer;
@@ -217,11 +214,11 @@ class SearchPipelineTest {
     }
 
     // --------------------------------------------------------
-    // 5. Ranking executor rejected task
+    // 5. Filtering executor rejected task
     // --------------------------------------------------------
 
     @Test
-    void rankingExecutorRejected() throws Exception {
+    void filteringExecutorRejected() throws Exception {
         ThreadPoolExecutor executor = new ThreadPoolExecutor(
                 1,
                 1,
@@ -286,14 +283,21 @@ class SearchPipelineTest {
             // try to execute the next task and get rejection
             try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
                 try {
-                    assertThatThrownBy(() ->
-                            pipeline.search(QUERY).get(2, TimeUnit.SECONDS)
-                    )
-                            .isInstanceOf(ExecutionException.class)
-                            .hasCauseInstanceOf(RejectedExecutionException.class);
+                    SearchResultBox result = pipeline.search(QUERY).get(2, TimeUnit.SECONDS);
+
+                    // Search itself completes successfully.
+                    assertThat(result).isNotNull();
+
+                    // Filtering fails because executor rejects the task.
+                    assertThat(result.processingErrors()).hasSize(1);
+
+                    assertThat(result.processingErrors().getFirst().processingStage()).isEqualTo(ProcessingStage.FILTER_PRODUCTS);
+
+                    // Filtering fallback is an empty list.
+                    assertThat(result.result().products()).isEmpty();
                 } finally {
                     // Что будет, если не вызвать countDown()?
-                    //Рабочий поток останется заблокированным.
+                    // Рабочий поток останется заблокированным.
                     // При вызове pipeline.close() метод awaitTermination(terminationTimeout, ...) будет ждать завершения executor до terminationTimeout секунд.
                     // Затем shutdownNow() попытается прервать поток, но это уже будет нештатный путь завершения теста.
 
