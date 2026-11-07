@@ -53,15 +53,19 @@ class SearchPipelineGracefulDegradationTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new IOException("Catalog unavailable")
-                ));
+                )));
 
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(OFFER_1)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
+                        List.of(OFFER_1)
+                )));
 
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(REVIEW_1)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
+                        List.of(REVIEW_1)
+                )));
 
         AtomicInteger filterCalls = new AtomicInteger();
         AtomicInteger rankCalls = new AtomicInteger();
@@ -208,19 +212,19 @@ class SearchPipelineGracefulDegradationTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new IOException("Catalog unavailable")
-                ));
+                )));
 
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new IOException("Offers unavailable")
-                ));
+                )));
 
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new IOException("Reviews unavailable")
-                ));
+                )));
 
         AtomicInteger filterCalls = new AtomicInteger();
         AtomicInteger rankCalls = new AtomicInteger();
@@ -245,13 +249,13 @@ class SearchPipelineGracefulDegradationTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(PRODUCT_1)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(PRODUCT_1))));
 
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(OFFER_1)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(OFFER_1))));
 
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(REVIEW_1)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(REVIEW_1))));
 
         return sourceClient;
     }

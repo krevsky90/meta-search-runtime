@@ -16,7 +16,7 @@ class CancellationContextIdempotencyTest {
         CountingFuture<String> task = new CountingFuture<>(() -> "do smth");
         CompletableFuture<String> result = new CompletableFuture<>();
 
-        assertThat(context.register(task, result)).isTrue();
+        assertThat(context.register(task, result).isActive()).isTrue();
 
         context.cancel();
         context.cancel();
@@ -40,7 +40,7 @@ class CancellationContextIdempotencyTest {
         assertThat(task.isDone()).isTrue();
         assertThat(task.isCancelled()).isFalse();
 
-        assertThat(context.register(task, result)).isTrue();
+        assertThat(context.register(task, result).isActive()).isTrue();
 
         context.cancel();
 

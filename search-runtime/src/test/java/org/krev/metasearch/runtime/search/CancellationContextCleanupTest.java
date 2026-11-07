@@ -18,9 +18,11 @@ class CancellationContextCleanupTest {
         CountingFuture<Void> task = new CountingFuture<>(() -> null);
         CompletableFuture<String> result = new CompletableFuture<>();
 
-        assertThat(context.register(task, result)).isTrue();
+        CancellationContext.Registration registration = context.register(task, result);
 
-        context.unregister(task, result);
+        assertThat(registration.isActive()).isTrue();
+
+        registration.unregister();
         context.cancel();
 
         assertThat(task.getCancelCount()).isZero();

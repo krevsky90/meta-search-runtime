@@ -4,6 +4,7 @@ package org.krev.metasearch.runtime.search;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
+import org.krev.metasearch.runtime.external.SourceCall;
 import org.krev.metasearch.runtime.model.Offer;
 import org.krev.metasearch.runtime.model.Product;
 import org.krev.metasearch.runtime.model.Review;
@@ -12,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -112,11 +112,11 @@ class SearchPipelineDeadlineTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(new CompletableFuture<>());
+                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(new CompletableFuture<>());
+                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(new CompletableFuture<>());
+                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
 
         try (TestSearchPipeline pipeline = new TestSearchPipeline(
                 sourceClient,
@@ -186,11 +186,11 @@ class SearchPipelineDeadlineTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(PRODUCT)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(PRODUCT))));
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(OFFER)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(OFFER))));
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(REVIEW)));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(REVIEW))));
 
         return sourceClient;
     }

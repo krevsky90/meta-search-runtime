@@ -2,10 +2,7 @@ package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -24,8 +21,8 @@ class CancellationContextTest {
         Future<?> task1 = new TestFuture();
         Future<?> task2 = new TestFuture();
 
-        assertThat(context.register(task1, result1)).isTrue();
-        assertThat(context.register(task2, result2)).isTrue();
+        assertThat(context.register(task1, result1).isActive()).isTrue();
+        assertThat(context.register(task2, result2).isActive()).isTrue();
 
         context.cancel();
 
@@ -65,9 +62,9 @@ class CancellationContextTest {
         TestFuture task = new TestFuture();
         CompletableFuture<String> result = new CompletableFuture<>();
 
-        boolean registered = context.register(task, result);
+        CancellationContext.Registration registration = context.register(task, result);
 
-        assertThat(registered).isFalse();
+        assertThat(registration.isActive()).isFalse();
         assertThat(task.isCancelled()).isTrue();
         assertThat(result.isCancelled()).isTrue();
     }
@@ -82,10 +79,10 @@ class CancellationContextTest {
         CompletableFuture<String> result1 = new CompletableFuture<>();
         CompletableFuture<String> result2 = new CompletableFuture<>();
 
-        context.register(task1, result1);
-        context.register(task2, result2);
+        CancellationContext.Registration registration1 = context.register(task1, result1);
+        CancellationContext.Registration registration2 = context.register(task2, result2);
 
-        context.unregister(task1, result1);
+        registration1.unregister();
 
         context.cancel();
 
@@ -94,45 +91,57 @@ class CancellationContextTest {
 
         assertThat(task2.isCancelled()).isTrue();
         assertThat(result2.isCancelled()).isTrue();
+
+        // обе регистрации неактивны: первая — потому что её сняли, вторая — потому что контекст отменили.
+        assertThat(registration1.isActive()).isFalse();
+        assertThat(registration2.isActive()).isFalse();
     }
 
     @Test
-    void unregister_shouldNotRemoveOperationWithDifferentResult() {
+    void unregister_shouldNotAffectOtherRegistrationWithSameTask() {
         CancellationContext context = new CancellationContext();
 
         TestFuture task = new TestFuture();
 
-        CompletableFuture<String> registeredResult = new CompletableFuture<>();
-        CompletableFuture<String> differentResult = new CompletableFuture<>();
+        CompletableFuture<String> result1 = new CompletableFuture<>();
+        CompletableFuture<String> result2 = new CompletableFuture<>();
 
-        context.register(task, registeredResult);
+        CancellationContext.Registration registration1 = context.register(task, result1);
+        CancellationContext.Registration registration2 = context.register(task, result2);
 
-        context.unregister(task, differentResult);
+        registration1.unregister();
 
         context.cancel();
 
-        assertThat(task.isCancelled()).isTrue();
-        assertThat(registeredResult.isCancelled()).isTrue();
-        assertThat(differentResult.isCancelled()).isFalse();
+        assertThat(registration1.isActive()).isFalse();
+        assertThat(registration2.isActive()).isFalse();
+
+        assertThat(result1.isCancelled()).isFalse();
+        assertThat(result2.isCancelled()).isTrue();
     }
 
     @Test
-    void unregister_shouldNotRemoveOperationWithDifferentTask() {
+    void unregister_shouldNotAffectOtherRegistrationWithSameResult() {
         CancellationContext context = new CancellationContext();
 
-        TestFuture registeredTask = new TestFuture();
-        TestFuture differentTask = new TestFuture();
+        TestFuture task1 = new TestFuture();
+        TestFuture task2 = new TestFuture();
 
         CompletableFuture<String> result = new CompletableFuture<>();
 
-        context.register(registeredTask, result);
+        CancellationContext.Registration registration1 = context.register(task1, result);
+        CancellationContext.Registration registration2 = context.register(task2, result);
 
-        context.unregister(differentTask, result);
+        registration1.unregister();
 
         context.cancel();
 
-        assertThat(registeredTask.isCancelled()).isTrue();
-        assertThat(differentTask.isCancelled()).isFalse();
+        assertThat(registration1.isActive()).isFalse();
+        assertThat(registration2.isActive()).isFalse();
+
+        assertThat(task1.isCancelled()).isFalse();
+        assertThat(task2.isCancelled()).isTrue();
+
         assertThat(result.isCancelled()).isTrue();
     }
 
@@ -174,20 +183,20 @@ class CancellationContextTest {
 
     /**
      * CancellationContext.cancel()
-     *         |
-     *         v
+     * |
+     * v
      * Future.cancel(true)
-     *         |
-     *         v
+     * |
+     * v
      * Thread.interrupt()
-     *         |
-     *         v
+     * |
+     * v
      * CountDownLatch.await()
-     *         |
-     *         v
+     * |
+     * v
      * InterruptedException
-     *         |
-     *         v
+     * |
+     * v
      * Рабочий поток завершается
      */
     @Test
@@ -322,6 +331,151 @@ class CancellationContextTest {
         // к-ый первым успел войти в CancellationContext#cancel, когда cancelled был false
         assertThat(task.cancelCalls()).isEqualTo(1);
         assertThat(result.isCancelled()).isTrue();
+    }
+
+    /**
+     * В коде
+     * if (registration.isActive()) {
+     * // Здесь другой поток может вызвать context.cancel().
+     * cpuExecutor.execute(task);
+     * }
+     * <p>
+     * Проверка isActive() и вызов execute() не атомарны.
+     * Гарантия, которую мы хотим проверить:
+     * даже если отмена произошла в промежутке между проверкой и отправкой задачи в executor, пользовательская CPU-операция не стартует.
+     */
+    @Test
+    void cancelledFutureTaskShouldNotStartWhenCancellationHappensBeforeRun() {
+        CancellationContext context = new CancellationContext();
+
+        AtomicBoolean processingStarted = new AtomicBoolean();
+
+        CompletableFuture<String> result = new CompletableFuture<>();
+
+        FutureTask<String> task = new FutureTask<>(() -> {
+            processingStarted.set(true);
+            return "processed";
+        }) {
+            @Override
+            protected void done() {
+                try {
+                    result.complete(get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result.completeExceptionally(e);
+                } catch (ExecutionException e) {
+                    result.completeExceptionally(e.getCause());
+                } catch (java.util.concurrent.CancellationException e) {
+                    result.cancel(false);
+                }
+            }
+        };
+
+        CancellationContext.Registration registration = context.register(task, result);
+
+        // Simulate the check in processingGeneric().
+        assertThat(registration.isActive()).isTrue();
+
+        // Global cancellation happens after isActive(), but before execute().
+        context.cancel();
+
+        // Simulate cpuExecutor.execute(task).
+        task.run();
+
+        assertThat(processingStarted).isFalse();
+        assertThat(task.isCancelled()).isTrue();
+        assertThat(result).isCancelled();
+        assertThat(context.isCancelled()).isTrue();
+    }
+
+    @Test
+    void unregister_shouldBeIdempotent() {
+        CancellationContext context = new CancellationContext();
+
+        TestFuture task = new TestFuture();
+        CompletableFuture<String> result = new CompletableFuture<>();
+
+        CancellationContext.Registration registration = context.register(task, result);
+
+        registration.unregister();
+        registration.unregister();
+
+        context.cancel();
+
+        assertThat(registration.isActive()).isFalse();
+        assertThat(task.isCancelled()).isFalse();
+        assertThat(result.isCancelled()).isFalse();
+    }
+
+    @Test
+    void cancel_shouldInterruptRunningProcessingTask() throws InterruptedException {
+        CancellationContext context = new CancellationContext();
+
+        CountDownLatch taskStarted = new CountDownLatch(1);
+        CountDownLatch taskInterrupted = new CountDownLatch(1);
+        CountDownLatch workerFinished = new CountDownLatch(1);
+
+        CompletableFuture<String> result = new CompletableFuture<>();
+
+        FutureTask<String> task = new FutureTask<>(() -> {
+            taskStarted.countDown();
+
+            try {
+                new CountDownLatch(1).await();
+                return "completed";
+            } catch (InterruptedException ex) {
+                taskInterrupted.countDown();
+                throw ex;
+            } finally {
+                workerFinished.countDown();
+            }
+        }) {
+            // done() вызывается самим FutureTask в ЛЮБОМ СЛУЧАЕ после того, как он завершился: успешно, с исключением или отменой.
+            // Поэтому get() уже не ожидает выполнения задачи, а сразу возвращает результат или выбрасывает исключение.
+            @Override
+            protected void done() {
+                try {
+                    result.complete(get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result.completeExceptionally(e);
+                } catch (ExecutionException e) {
+                    result.completeExceptionally(e.getCause());
+                } catch (CancellationException e) {
+                    result.cancel(false);
+                }
+            }
+        };
+
+        context.register(task, result);
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            executor.execute(task);
+
+            assertThat(taskStarted.await(2, TimeUnit.SECONDS)).isTrue();
+
+            context.cancel();
+
+            assertThat(task.isCancelled()).isTrue();
+            assertThat(result.isCancelled()).isTrue();
+
+            assertThat(taskInterrupted.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(workerFinished.await(2, TimeUnit.SECONDS)).isTrue();
+
+
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(1, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static class TestFuture implements Future<Object> {

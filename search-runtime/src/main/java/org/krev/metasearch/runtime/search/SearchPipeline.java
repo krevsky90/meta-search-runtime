@@ -5,6 +5,7 @@ import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.exceptions.InvalidInputProcessingException;
 import org.krev.metasearch.runtime.exceptions.InvalidSourceResponseException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
+import org.krev.metasearch.runtime.external.SourceCall;
 import org.krev.metasearch.runtime.model.Offer;
 import org.krev.metasearch.runtime.model.Product;
 import org.krev.metasearch.runtime.model.Review;
@@ -65,22 +66,39 @@ public class SearchPipeline implements AutoCloseable {
     // --------------------------------------------------------
     // 1. Normalize individual source result
     // --------------------------------------------------------
-
     private <T> CompletableFuture<SearchBox<List<T>>> searchGeneric(
-            Function<String, CompletableFuture<List<T>>> searchFunction,
+            Function<String, SourceCall<List<T>>> function,
             String query,
             String source,
-            Duration timeout
+            Duration timeout,
+            CancellationContext cancellationContext
+
     ) {
+        SourceCall<List<T>> call = null;
+        CancellationContext.Registration registration = null;
         try {
-            CompletableFuture<List<T>> sourceFuture = Objects.requireNonNull(searchFunction.apply(query))
+            call = Objects.requireNonNull(function.apply(query));
+            registration = cancellationContext.register(call);
+            SourceCall<List<T>> finalCall = call;
+
+            CompletableFuture<List<T>> timedResult = Objects.requireNonNull(call.result())
                     .thenApply(Function.identity())
                     .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
-            return sourceFuture.handle((result, ex) -> {
-                if (ex != null) {
+            CompletableFuture<SearchBox<List<T>>> resultCf = timedResult.handle((result, ex) -> {
+                Throwable cause = unwrap(ex);
+
+                if (cause instanceof TimeoutException) {
+                    try {
+                        //means local deadline is exceeded -> cancel external call
+                        finalCall.cancelTransport();
+                    } catch (RuntimeException cancellationError) {
+                        // TODO: log cancellation failure
+                    }
+                }
+                if (cause != null) {
                     return new SearchBox<>(
                             List.of(),
-                            toSourceError(source, ex)
+                            toSourceError(source, cause)
                     );
                 }
 
@@ -110,7 +128,25 @@ public class SearchPipeline implements AutoCloseable {
                 }
             });
 
+            CancellationContext.Registration finalRegistration = registration;
+            resultCf.whenComplete((result, ex) -> {
+                finalRegistration.unregister();
+            });
+
+            return resultCf;
         } catch (RuntimeException ex) {
+            // if call.result() throws Exception or returns null, then we will jump to current catch
+            // if registration exists, we have to remove it (otherwise it will blow up cancellationContext => memory leak)
+            if (registration != null) {
+                try {
+                    call.cancel();
+                } catch (RuntimeException cancellationError) {
+                    // TODO: log cancellation failure
+                } finally {
+                    registration.unregister();
+                }
+            }
+
             // Handle synchronous exception thrown before a future is returned.
             return CompletableFuture.completedFuture(
                     new SearchBox<>(
@@ -150,9 +186,11 @@ public class SearchPipeline implements AutoCloseable {
             }
         };
 
+        CancellationContext.Registration registration = cancellationContext.register(ft, cf);
+
         CompletableFuture<ProcessingBox<List<T>>> finalCf =
                 cf.handle((result, ex) -> {
-                    cancellationContext.unregister(ft, cf);
+                    registration.unregister();
 
                     Throwable cause = unwrap(ex);
 
@@ -194,9 +232,8 @@ public class SearchPipeline implements AutoCloseable {
                 });
 
 
-        boolean register = cancellationContext.register(ft, cf);
-        if (register) {
-            // 'register = true' means context is NOT cancelled => we should process this task
+        if (registration.isActive()) {
+            // The operation has not been cancelled or unregistered yet.
             try {
                 cpuExecutor.execute(ft);
             } catch (RejectedExecutionException ex) {
@@ -205,7 +242,7 @@ public class SearchPipeline implements AutoCloseable {
                 // + unregister(ft, cf). NOTE: if we do not do that and cpuExecutor throws Exception =>
                 //      cancellationContext.unregister(ft, cf); won't be executed in handle =>
                 //      cancellationContext will grow => memory leak!
-                cancellationContext.unregister(ft, cf);
+                registration.unregister();
 
                 cf.completeExceptionally(ex);
             }
@@ -361,28 +398,34 @@ public class SearchPipeline implements AutoCloseable {
         long deadlineNanos = System.nanoTime() + requestTimeout.toNanos();
 
         // Start all three independent requests.
+        // catalog
         CompletableFuture<SearchBox<List<Product>>> products =
                 searchGeneric(
                         sourceClient::searchCatalog,
                         query,
                         "catalog",
-                        sourceTimeouts.catalog()
+                        sourceTimeouts.catalog(),
+                        cancellationContext
                 );
 
+        // offers
         CompletableFuture<SearchBox<List<Offer>>> offers =
                 searchGeneric(
                         sourceClient::searchOffers,
                         query,
                         "offers",
-                        sourceTimeouts.offers()
+                        sourceTimeouts.offers(),
+                        cancellationContext
                 );
 
+        //reviews
         CompletableFuture<SearchBox<List<Review>>> reviews =
                 searchGeneric(
                         sourceClient::searchReviews,
                         query,
                         "reviews",
-                        sourceTimeouts.reviews()
+                        sourceTimeouts.reviews(),
+                        cancellationContext
                 );
 
         // Wait until all three futures complete.

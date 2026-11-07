@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
+import org.krev.metasearch.runtime.external.SourceCall;
 import org.krev.metasearch.runtime.model.Offer;
 import org.krev.metasearch.runtime.model.Product;
 import org.krev.metasearch.runtime.model.Review;
@@ -26,9 +27,9 @@ class SearchPipelineCancellationRaceTest {
 
     @Test
     void shouldCancelCpuTaskWhenSourcesCompleteConcurrentlyWithRequestCancellation() throws Exception {
-        CompletableFuture<List<Product>> catalogFuture = new CompletableFuture<>();
-        CompletableFuture<List<Offer>> offersFuture = new CompletableFuture<>();
-        CompletableFuture<List<Review>> reviewsFuture = new CompletableFuture<>();
+        SourceCall<List<Product>> catalogFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCall<List<Offer>> offersFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCall<List<Review>> reviewsFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
 
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
@@ -58,9 +59,9 @@ class SearchPipelineCancellationRaceTest {
                 ready.countDown();
                 await(start);
 
-                catalogFuture.complete(List.of(new Product("product-1")));
-                offersFuture.complete(List.of());
-                reviewsFuture.complete(List.of());
+                catalogFuture.result().complete(List.of(new Product("product-1")));
+                offersFuture.result().complete(List.of());
+                reviewsFuture.result().complete(List.of());
             });
 
             Future<?> requestCancellation = racers.submit(() -> {
@@ -163,7 +164,7 @@ class SearchPipelineCancellationRaceTest {
             }
         };
 
-        assertThat(context.register(task, result)).isTrue();
+        assertThat(context.register(task, result).isActive()).isTrue();
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);

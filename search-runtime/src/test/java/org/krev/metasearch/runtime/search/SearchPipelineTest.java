@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
+import org.krev.metasearch.runtime.external.SourceCall;
 import org.krev.metasearch.runtime.model.Offer;
 import org.krev.metasearch.runtime.model.Product;
 import org.krev.metasearch.runtime.model.Review;
@@ -32,19 +33,19 @@ class SearchPipelineTest {
     void allSourcesSuccessful() throws Exception {
 
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Product("p1"), new Product("p2"))
-                ));
+               )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Offer("o1"))
-                ));
+               )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Review("r1"))
-                ));
+               )));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(1),
@@ -72,19 +73,19 @@ class SearchPipelineTest {
     @Test
     void oneSourceFailed() throws Exception {
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new ConnectException("Catalog unavailable")
-                ));
+                )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Offer("o1"))
-                ));
+                )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Review("r1"))
-                ));
+                )));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(1),
@@ -117,19 +118,19 @@ class SearchPipelineTest {
     void twoSourcesFailed() throws Exception {
 
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new ConnectException("Catalog unavailable")
-                ));
+                )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new TimeoutException("Offers timeout")
-                ));
+                )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Review("r1"))
-                ));
+                )));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(1),
@@ -166,19 +167,19 @@ class SearchPipelineTest {
     @Test
     void allSourcesFailedWithDifferentErrors() {
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new ConnectException("Catalog unavailable")
-                ));
+                )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new TimeoutException("Offers timeout")
-                ));
+                )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.failedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.failedFuture(
                         new IOException("Reviews unavailable")
-                ));
+               )));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(1),
@@ -260,19 +261,19 @@ class SearchPipelineTest {
             // => the next task will be rejected!
 
             when(sourceClient.searchCatalog(QUERY))
-                    .thenReturn(CompletableFuture.completedFuture(
+                    .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                             List.of(new Product("p1"))
-                    ));
+                    )));
 
             when(sourceClient.searchOffers(QUERY))
-                    .thenReturn(CompletableFuture.completedFuture(
+                    .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                             List.of(new Offer("o1"))
-                    ));
+                    )));
 
             when(sourceClient.searchReviews(QUERY))
-                    .thenReturn(CompletableFuture.completedFuture(
+                    .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                             List.of(new Review("r1"))
-                    ));
+                    )));
 
             SourceTimeouts sourceTimeouts = new SourceTimeouts(
                     Duration.ofSeconds(1),
@@ -360,19 +361,19 @@ class SearchPipelineTest {
         );
 
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Product("p1"), new Product("p2"))
-                ));
+               )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Offer("o1"))
-                ));
+               )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Review("r1"))
-                ));
+               )));
 
         try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
 
@@ -409,9 +410,9 @@ class SearchPipelineTest {
     @Test
     void search_shouldTimeout_whenSourceDoesNotRespondBeforeDeadline() {
         // Given
-        CompletableFuture<List<Product>> catalogFuture = CompletableFuture.completedFuture(List.of(new Product("p1")));
-        CompletableFuture<List<Offer>> offersFuture = CompletableFuture.completedFuture(List.of(new Offer("o1")));
-        CompletableFuture<List<Review>> reviewsFuture = new CompletableFuture<>();  // значит, ничего не отвечает, тупит
+        SourceCall<List<Product>> catalogFuture = new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(new Product("p1"))));
+        SourceCall<List<Offer>> offersFuture = new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(new Offer("o1"))));
+        SourceCall<List<Review>> reviewsFuture = new SourceCallTestImpl<>(new CompletableFuture<>());  // значит, ничего не отвечает, тупит
 
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
@@ -463,13 +464,13 @@ class SearchPipelineTest {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(new Product("p1"))));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(new Product("p1")))));
 
         when(sourceClient.searchOffers(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(new Offer("o1"))));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(new Offer("o1")))));
 
         when(sourceClient.searchReviews(anyString()))
-                .thenReturn(CompletableFuture.completedFuture(List.of(new Review("r1"))));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(List.of(new Review("r1")))));
 
         ThreadPoolExecutor cpuExecutor = createSingleThreadCpuExecutor();
 
@@ -552,9 +553,9 @@ class SearchPipelineTest {
         List<Offer> offers = List.of(new Offer("offer-1"));
         List<Review> reviews = List.of(new Review("review-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(new CompletableFuture<>());
-        when(sourceClient.searchOffers(anyString())).thenReturn(CompletableFuture.completedFuture(offers));
-        when(sourceClient.searchReviews(anyString())).thenReturn(CompletableFuture.completedFuture(reviews));
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers)));
+        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews)));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(100),
@@ -589,9 +590,9 @@ class SearchPipelineTest {
         List<Product> products = List.of(new Product("product-1"));
         List<Review> reviews = List.of(new Review("review-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(CompletableFuture.completedFuture(products));
-        when(sourceClient.searchOffers(anyString())).thenReturn(new CompletableFuture<>());
-        when(sourceClient.searchReviews(anyString())).thenReturn(CompletableFuture.completedFuture(reviews));
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(products)));
+        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews)));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(2),
@@ -626,9 +627,9 @@ class SearchPipelineTest {
         List<Product> products = List.of(new Product("product-1"));
         List<Offer> offers = List.of(new Offer("offer-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(CompletableFuture.completedFuture(products));
-        when(sourceClient.searchOffers(anyString())).thenReturn(CompletableFuture.completedFuture(offers));
-        when(sourceClient.searchReviews(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(products)));
+        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers)));
+        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(2),
@@ -659,9 +660,9 @@ class SearchPipelineTest {
         // given
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(new CompletableFuture<>());
-        when(sourceClient.searchOffers(anyString())).thenReturn(new CompletableFuture<>());
-        when(sourceClient.searchReviews(anyString())).thenReturn(new CompletableFuture<>());
+        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(100),

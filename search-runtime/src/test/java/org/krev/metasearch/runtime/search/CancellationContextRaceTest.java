@@ -35,7 +35,7 @@ class CancellationContextRaceTest {
                 ready.countDown();
                 await(start);
 
-                registered.set(context.register(task, result));
+                registered.set(context.register(task, result).isActive());
             });
 
             Future<?> cancellation = racers.submit(() -> {

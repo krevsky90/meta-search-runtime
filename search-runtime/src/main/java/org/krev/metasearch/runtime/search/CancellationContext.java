@@ -1,6 +1,8 @@
 
 package org.krev.metasearch.runtime.search;
 
+import org.krev.metasearch.runtime.external.SourceCall;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -9,52 +11,52 @@ import java.util.concurrent.Future;
 
 /**
  * Manages cancellation of operations belonging to a single search request.
- * <p>
- * Each registered operation consists of:
- * - Future: handle used to interrupt the actual executing task;
- * - CompletableFuture: handle used to complete the asynchronous result.
  *
- * CancellationContext хранит оба объекта:
- * Future<?> task - нужен для попытки остановить выполнение
- * CompletableFuture<?> result - чтобы сообщить остальному pipeline, что результат больше не будет получен.
+ * Each registered operation provides a cancellation action.
+ * The action may cancel a CPU task, an external call, or another
+ * asynchronous operation.
  */
 public final class CancellationContext {
+    public interface Registration {
+        void unregister();
+        boolean isActive();
+    }
+
     private final List<RegisteredOperation> operations = new ArrayList<>();
     private boolean cancelled;
 
-    /**
-     * Registers an operation.
-     *
-     * @return true if the operation was registered;
-     * false if the context was already cancelled.
-     */
-    public boolean register(Future<?> task, CompletableFuture<?> result) {
+    public Registration register(Future<?> task, CompletableFuture<?> result) {
         Objects.requireNonNull(task, "task must not be null");
         Objects.requireNonNull(result, "result must not be null");
 
+        return register(() -> {
+            task.cancel(true);
+            result.cancel(false);
+        });
+    }
+
+    public Registration register(SourceCall<?> sourceCall) {
+        Objects.requireNonNull(sourceCall, "sourceCall must not be null");
+        return register(sourceCall::cancel);
+    }
+
+    public Registration register(Runnable cancelAction) {
+        Objects.requireNonNull(cancelAction, "cancelAction must not be null");
+
+        RegisteredOperation operation = new RegisteredOperation(cancelAction);
+
         synchronized (this) {
             if (!cancelled) {
-                operations.add(new RegisteredOperation(task, result));
-                return true;
+                operations.add(operation);
+                return operation;
             }
         }
 
-        // The context was already cancelled.
-        cancelOperation(new RegisteredOperation(task, result));
-        return false;
+        // Context was already cancelled.
+        operation.cancel();
+        return operation;
     }
 
-    /**
-     * Removes an operation after its execution has finished.
-     */
-    public synchronized void unregister(Future<?> task, CompletableFuture<?> result) {
-        operations.removeIf(operation -> operation.task() == task && operation.result() == result);
-    }
-
-    /**
-     * Cancels all registered operations.
-     * This method is idempotent.
-     */
     public void cancel() {
         List<RegisteredOperation> operationsToCancel;
 
@@ -64,14 +66,17 @@ public final class CancellationContext {
             }
 
             cancelled = true;
-
             operationsToCancel = List.copyOf(operations);
             operations.clear();
         }
 
         // Do not hold the lock while invoking cancellation.
         for (RegisteredOperation operation : operationsToCancel) {
-            cancelOperation(operation);
+            try {
+                operation.cancel();
+            } catch (RuntimeException e) {
+                // TODO: log cancellation failure
+            }
         }
     }
 
@@ -79,11 +84,48 @@ public final class CancellationContext {
         return cancelled;
     }
 
-    private void cancelOperation(RegisteredOperation operation) {
-        operation.task().cancel(true);
-        operation.result().cancel(false);
-    }
+    private final class RegisteredOperation implements Registration {
+        private final Runnable cancelAction;
+        // NOTE: unregister() и cancel() конкурируют за одну регистрацию, но операция отменяется не более одного раза, т.к. есть
+        //      if (unregistered) {
+        //                    return;
+        //                }
+        private boolean unregistered;
 
-    private record RegisteredOperation(Future<?> task, CompletableFuture<?> result) {
+        private RegisteredOperation(Runnable cancelAction) {
+            this.cancelAction = cancelAction;
+        }
+
+        @Override
+        public void unregister() {
+            synchronized (CancellationContext.this) {
+                if (unregistered) {
+                    return;
+                }
+
+                unregistered = true;
+                operations.remove(this);
+            }
+        }
+
+        @Override
+        public boolean isActive() {
+            synchronized (CancellationContext.this) {
+                return !unregistered && !cancelled;
+            }
+        }
+
+        private void cancel() {
+            synchronized (CancellationContext.this) {
+                if (unregistered) {
+                    return;
+                }
+
+                unregistered = true;
+                operations.remove(this);
+            }
+
+            cancelAction.run();
+        }
     }
 }

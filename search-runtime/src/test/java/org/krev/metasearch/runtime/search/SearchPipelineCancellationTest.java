@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
+import org.krev.metasearch.runtime.external.SourceCall;
 import org.krev.metasearch.runtime.model.Offer;
 import org.krev.metasearch.runtime.model.Product;
 import org.krev.metasearch.runtime.model.Review;
@@ -114,9 +115,9 @@ class SearchPipelineCancellationTest {
      */
     @Test
     void shouldNotSubmitCpuTaskWhenCallerCancelsBeforeSourcesComplete() {
-        CompletableFuture<List<Product>> catalogFuture = new CompletableFuture<>();
-        CompletableFuture<List<Offer>> offersFuture = new CompletableFuture<>();
-        CompletableFuture<List<Review>> reviewsFuture = new CompletableFuture<>();
+        SourceCall<List<Product>> catalogFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCall<List<Offer>> offersFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCall<List<Review>> reviewsFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
 
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
@@ -143,27 +144,72 @@ class SearchPipelineCancellationTest {
         assertThat(result.cancel(true)).isTrue();
 
         // Sources complete after cancellation.
-        catalogFuture.complete(List.of(new Product("product-1")));
-        offersFuture.complete(List.of());
-        reviewsFuture.complete(List.of());
+        catalogFuture.result().complete(List.of(new Product("product-1")));
+        offersFuture.result().complete(List.of());
+        reviewsFuture.result().complete(List.of());
 
         // CPU processing must not be submitted.
         assertThat(executor.submittedTaskCount()).isZero();
+    }
+
+    @Test
+    void shouldCancelAllSourceCallsWhenCallerCancelsSearch() {
+        SourceCallTestImpl<List<Product>> catalogFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCallTestImpl<List<Offer>> offersFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCallTestImpl<List<Review>> reviewsFuture = new SourceCallTestImpl<>(new CompletableFuture<>());
+
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        when(sourceClient.searchCatalog(QUERY)).thenReturn(catalogFuture);
+        when(sourceClient.searchOffers(QUERY)).thenReturn(offersFuture);
+        when(sourceClient.searchReviews(QUERY)).thenReturn(reviewsFuture);
+
+        CapturingExecutor executor = new CapturingExecutor();
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                Duration.ofSeconds(10),
+                0,
+                SOURCE_TIMEOUTS
+        );
+
+        CompletableFuture<SearchResultBox> result = pipeline.search(QUERY);
+
+        // All sources are still pending.
+        assertThat(executor.submittedTaskCount()).isZero();
+
+        // Caller cancels the request.
+        assertThat(result.cancel(true)).isTrue();
+
+        // Sources complete after cancellation.
+        assertThat(catalogFuture.result()).isCancelled();
+        assertThat(offersFuture.result()).isCancelled();
+        assertThat(reviewsFuture.result()).isCancelled();
+
+
+        assertThat(catalogFuture.getCancelTransportCounter()).isEqualTo(1);
+        assertThat(offersFuture.getCancelTransportCounter()).isEqualTo(1);
+        assertThat(reviewsFuture.getCancelTransportCounter()).isEqualTo(1);
     }
 
     private SearchSourceClient successfulSourceClient() {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
         when(sourceClient.searchCatalog(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
                         List.of(new Product("product-1"))
-                ));
+                )));
 
         when(sourceClient.searchOffers(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(List.of()));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
+                        List.of()
+                )));
 
         when(sourceClient.searchReviews(QUERY))
-                .thenReturn(CompletableFuture.completedFuture(List.of()));
+                .thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(
+                        List.of()
+                )));
 
         return sourceClient;
     }
