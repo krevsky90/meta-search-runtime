@@ -1,0 +1,24 @@
+// Внутренний API рекомендаций. Пока используем query-based модель.
+
+syntax = "proto3";
+
+package metasearch.recommendations.v1;
+
+import "common/v1/common.proto";
+
+option java_package = "org.krev.metasearch.proto.recommendations.v1";
+option java_multiple_files = true;
+option java_outer_classname = "RecommendationsProto";
+
+service RecommendationsService {
+  rpc Recommend(RecommendationsRequest) returns (RecommendationsResponse);
+}
+
+message RecommendationsRequest {
+  string query = 1;
+  int32 limit = 2; // int32 Для количества результатов этого достаточно. Валидация положительного значения и верхней границы будет ответственностью сервиса.
+}
+
+message RecommendationsResponse {
+  repeated metasearch.common.v1.ScoredProduct results = 1;
+}
