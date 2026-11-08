@@ -470,16 +470,55 @@ class CancellationContextTest {
         }
     }
 
-    private static void await(CountDownLatch latch) {
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+    /**
+     * checks that code
+     *         for (RegisteredOperation operation : operationsToCancel) {
+     *             try {
+     *                 operation.cancel();
+     *             } catch (RuntimeException e) {
+     *                 ...
+     *             }
+     *         }
+     *  does not throw any exception if operation.cancel() throws RuntimeException
+     *  ИТОГО: ошибка отмены одной операции не должна мешать освобождению остальных ресурсов.
+     */
+    @Test
+    void cancellationFailureDoesNotStopOtherCancellations() {
+        CancellationContext context = new CancellationContext();
+
+        AtomicInteger firstCounter = new AtomicInteger();
+        AtomicInteger secondCounter = new AtomicInteger();
+        AtomicInteger thirdCounter = new AtomicInteger();
+
+        context.register(() -> {
+            firstCounter.incrementAndGet();
+            throw new RuntimeException("Cancellation failed");
+        });
+
+        context.register(secondCounter::incrementAndGet);
+        context.register(thirdCounter::incrementAndGet);
+
+        // NOTE: context::cancel запускает для каждой зарегистрированной операции operation.cancel();
+        // operation.cancel() запускает cancelAction.run();
+        // cancelAction - это переданная лямбда типа secondCounter::incrementAndGet
+        assertThatCode(context::cancel)
+                .doesNotThrowAnyException();
+
+        assertThat(context.isCancelled()).isTrue();
+
+        assertThat(firstCounter.get()).isEqualTo(1);
+        assertThat(secondCounter.get()).isEqualTo(1);
+        assertThat(thirdCounter.get()).isEqualTo(1);
+
+        // Повторная отмена не должна повторно вызывать actions
+        context.cancel();
+
+        assertThat(firstCounter.get()).isEqualTo(1);
+        assertThat(secondCounter.get()).isEqualTo(1);
+        assertThat(thirdCounter.get()).isEqualTo(1);
     }
 
     private static class TestFuture implements Future<Object> {
-
         private final AtomicBoolean cancelled = new AtomicBoolean(false);
         private final AtomicInteger cancelCalls = new AtomicInteger();
 

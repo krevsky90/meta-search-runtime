@@ -553,9 +553,13 @@ class SearchPipelineTest {
         List<Offer> offers = List.of(new Offer("offer-1"));
         List<Review> reviews = List.of(new Review("review-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
-        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers)));
-        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews)));
+        SourceCallTestImpl<List<Product>> catalogCall = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCallTestImpl<List<Offer>> offersCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers));
+        SourceCallTestImpl<List<Review>> reviewsCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews));
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogCall);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersCall);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsCall);
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(100),
@@ -578,6 +582,11 @@ class SearchPipelineTest {
                         assertThat(error.source()).isEqualTo("catalog");
                         assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
                     });
+
+            // Verify transport cancellation
+            assertThat(catalogCall.getCancelTransportCounter()).isEqualTo(1);
+            assertThat(offersCall.getCancelTransportCounter()).isZero();
+            assertThat(reviewsCall.getCancelTransportCounter()).isZero();
         }
     }
 
@@ -590,9 +599,13 @@ class SearchPipelineTest {
         List<Product> products = List.of(new Product("product-1"));
         List<Review> reviews = List.of(new Review("review-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(products)));
-        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
-        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews)));
+        SourceCallTestImpl<List<Product>> catalogCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(products));
+        SourceCallTestImpl<List<Offer>> offersCall = new SourceCallTestImpl<>(new CompletableFuture<>());
+        SourceCallTestImpl<List<Review>> reviewsCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(reviews));
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogCall);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersCall);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsCall);
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(2),
@@ -615,6 +628,11 @@ class SearchPipelineTest {
                         assertThat(error.source()).isEqualTo("offers");
                         assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
                     });
+
+            // Verify transport cancellation
+            assertThat(catalogCall.getCancelTransportCounter()).isZero();
+            assertThat(offersCall.getCancelTransportCounter()).isEqualTo(1);
+            assertThat(reviewsCall.getCancelTransportCounter()).isZero();
         }
     }
 
@@ -627,9 +645,13 @@ class SearchPipelineTest {
         List<Product> products = List.of(new Product("product-1"));
         List<Offer> offers = List.of(new Offer("offer-1"));
 
-        when(sourceClient.searchCatalog(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(products)));
-        when(sourceClient.searchOffers(anyString())).thenReturn(new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers)));
-        when(sourceClient.searchReviews(anyString())).thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        SourceCallTestImpl<List<Product>> catalogCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(products));
+        SourceCallTestImpl<List<Offer>> offersCall = new SourceCallTestImpl<>(CompletableFuture.completedFuture(offers));
+        SourceCallTestImpl<List<Review>> reviewsCall = new SourceCallTestImpl<>(new CompletableFuture<>());
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogCall);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersCall);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsCall);
 
         SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofSeconds(2),
@@ -652,6 +674,11 @@ class SearchPipelineTest {
                         assertThat(error.source()).isEqualTo("reviews");
                         assertThat(error.code()).isEqualTo(ErrorCode.TIMEOUT);
                     });
+
+            // Verify transport cancellation
+            assertThat(catalogCall.getCancelTransportCounter()).isZero();
+            assertThat(offersCall.getCancelTransportCounter()).isZero();
+            assertThat(reviewsCall.getCancelTransportCounter()).isEqualTo(1);
         }
     }
 

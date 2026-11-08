@@ -12,11 +12,17 @@ import org.krev.metasearch.runtime.model.Review;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.function.Function;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SearchPipelineCancellationTest {
+    private static final Duration REQUEST_TIMEOUT = Duration.ofMillis(200);
+
     private static final String QUERY = "test";
 
     private static final SourceTimeouts SOURCE_TIMEOUTS =
@@ -193,6 +199,59 @@ class SearchPipelineCancellationTest {
         assertThat(reviewsFuture.getCancelTransportCounter()).isEqualTo(1);
     }
 
+    @Test
+    void cancellingCompletedSearchHasNoEffect() {
+        SearchSourceClient sourceClient = mock(SearchSourceClient.class);
+
+        SourceCallTestImpl<List<Product>> catalogCall =
+                new SourceCallTestImpl<>(
+                        CompletableFuture.completedFuture(List.of(new Product("product")))
+                );
+
+        SourceCallTestImpl<List<Offer>> offersCall =
+                new SourceCallTestImpl<>(
+                        CompletableFuture.completedFuture(List.of(new Offer("offer")))
+                );
+
+        SourceCallTestImpl<List<Review>> reviewsCall =
+                new SourceCallTestImpl<>(
+                        CompletableFuture.completedFuture(List.of(new Review("review")))
+                );
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogCall);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersCall);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsCall);
+
+        try (TestSearchPipeline pipeline = new TestSearchPipeline(
+                sourceClient,
+                REQUEST_TIMEOUT,
+                products -> products,
+                products -> products
+        )) {
+            CompletableFuture<SearchResultBox> result = pipeline.search("query");
+
+            SearchResultBox completedResult = result.join();
+
+            assertThat(result.isDone()).isTrue();
+            assertThat(result.isCompletedExceptionally()).isFalse();
+            assertThat(result.isCancelled()).isFalse();
+
+            // Отмена уже завершённого future должна вернуть false.
+            assertThat(result.cancel(true)).isFalse();
+
+            assertThat(result.isDone()).isTrue();
+            assertThat(result.isCompletedExceptionally()).isFalse();
+            assertThat(result.isCancelled()).isFalse();
+
+            assertThat(result.join()).isSameAs(completedResult);
+
+            // Внешние вызовы уже завершились — отменять транспорт не нужно.
+            assertThat(catalogCall.getCancelTransportCounter()).isZero();
+            assertThat(offersCall.getCancelTransportCounter()).isZero();
+            assertThat(reviewsCall.getCancelTransportCounter()).isZero();
+        }
+    }
+
     private SearchSourceClient successfulSourceClient() {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
@@ -212,5 +271,50 @@ class SearchPipelineCancellationTest {
                 )));
 
         return sourceClient;
+    }
+
+    private static class TestSearchPipeline extends SearchPipeline {
+        private static final Duration SOURCE_TIMEOUT = Duration.ofSeconds(3);
+
+        private final Function<List<Product>, List<Product>> filterFunction;
+        private final Function<List<Product>, List<Product>> rankFunction;
+
+        TestSearchPipeline(
+                SearchSourceClient sourceClient,
+                Duration requestTimeout,
+                Function<List<Product>, List<Product>> filterFunction,
+                Function<List<Product>, List<Product>> rankFunction
+        ) {
+            super(
+                    sourceClient,
+                    new ThreadPoolExecutor(
+                            2,
+                            2,
+                            0L,
+                            TimeUnit.MILLISECONDS,
+                            new LinkedBlockingQueue<>()
+                    ),
+                    requestTimeout,
+                    2L,
+                    new SourceTimeouts(
+                            SOURCE_TIMEOUT,
+                            SOURCE_TIMEOUT,
+                            SOURCE_TIMEOUT
+                    )
+            );
+
+            this.filterFunction = filterFunction;
+            this.rankFunction = rankFunction;
+        }
+
+        @Override
+        List<Product> filterProducts(List<Product> products) {
+            return filterFunction.apply(products);
+        }
+
+        @Override
+        List<Product> rankProducts(List<Product> products) {
+            return rankFunction.apply(products);
+        }
     }
 }

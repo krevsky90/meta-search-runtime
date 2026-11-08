@@ -108,15 +108,36 @@ class SearchPipelineDeadlineTest {
     }
 
     @Test
-    void shouldTimeoutWhenSourcesExceedRequestDeadline() {
+    void shouldTimeoutWhenSourcesExceedRequestDeadline() throws InterruptedException {
         SearchSourceClient sourceClient = mock(SearchSourceClient.class);
 
-        when(sourceClient.searchCatalog(anyString()))
-                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
-        when(sourceClient.searchOffers(anyString()))
-                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
-        when(sourceClient.searchReviews(anyString()))
-                .thenReturn(new SourceCallTestImpl<>(new CompletableFuture<>()));
+        // NOTE: проверка счётчиков сразу после assertTimeout(result) потенциально подвержена гонке.
+        // потому что в SearchPipeline # search(...) есть код:
+        // result.whenComplete((searchResultBox, ex) -> {
+        //    Throwable cause = unwrap(ex);
+        //    if (cause instanceof TimeoutException || cause instanceof CancellationException) {
+        //        cancellationContext.cancel();
+        //    }
+        // });
+        //
+        //
+        // whenComplete — зависимая стадия. Когда result завершается, ожидающий join() поток может проснуться раньше,
+        // чем выполнится callback отмены.
+        // Поэтому теоретически join() уже выбросит исключение, а CancellationContext.cancel() ещё не успеет закончить работу.
+        CountDownLatch transportsCancelled = new CountDownLatch(3);
+
+        SourceCallTestImpl<List<Product>> catalogCall =
+                new SourceCallTestImpl<>(new CompletableFuture<>(), transportsCancelled::countDown);
+
+        SourceCallTestImpl<List<Offer>> offersCall =
+                new SourceCallTestImpl<>(new CompletableFuture<>(), transportsCancelled::countDown);
+
+        SourceCallTestImpl<List<Review>> reviewsCall =
+                new SourceCallTestImpl<>(new CompletableFuture<>(), transportsCancelled::countDown);
+
+        when(sourceClient.searchCatalog(anyString())).thenReturn(catalogCall);
+        when(sourceClient.searchOffers(anyString())).thenReturn(offersCall);
+        when(sourceClient.searchReviews(anyString())).thenReturn(reviewsCall);
 
         try (TestSearchPipeline pipeline = new TestSearchPipeline(
                 sourceClient,
@@ -124,10 +145,16 @@ class SearchPipelineDeadlineTest {
                 products -> products,
                 products -> products
         )) {
-            CompletableFuture<SearchResultBox> result =
-                    pipeline.search("query");
+            CompletableFuture<SearchResultBox> result = pipeline.search("query");
 
             assertTimeout(result);
+            // все 3 call гарантированно закенселены
+            assertThat(transportsCancelled.await(1, TimeUnit.SECONDS)).isTrue();
+
+            // Verify transport cancellation
+            assertThat(catalogCall.getCancelTransportCounter()).isEqualTo(1);
+            assertThat(offersCall.getCancelTransportCounter()).isEqualTo(1);
+            assertThat(reviewsCall.getCancelTransportCounter()).isEqualTo(1);
         }
     }
 
