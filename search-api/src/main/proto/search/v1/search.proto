@@ -1,0 +1,24 @@
+// Внешний API, через который клиент обращается к метапоиску.
+
+syntax = "proto3";
+
+package metasearch.search.v1;
+
+import "common/v1/common.proto";
+
+option java_package = "org.krev.metasearch.proto.search.v1";
+option java_multiple_files = true;
+option java_outer_classname = "SearchProto";
+
+service SearchService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+message SearchRequest {
+  string query = 1;
+  int32 limit = 2;  // int32 Для количества результатов этого достаточно. Валидация положительного значения и верхней границы будет ответственностью сервиса.
+}
+
+message SearchResponse {
+  repeated metasearch.common.v1.ScoredProduct results = 1;
+}

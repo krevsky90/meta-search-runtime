@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package metasearch.common.v1;
+
+option java_package = "org.krev.metasearch.proto.common.v1";
+option java_multiple_files = true;
+option java_outer_classname = "CommonProto";
+
+// Product описывает сам товар.
+message Product {
+  string id = 1;
+  string name = 2;
+}
+
+// ScoredProduct добавляет результат оценки релевантности.
+// Один и тот же товар может иметь разные score в TextSearch и Recommendations.
+message ScoredProduct {
+  Product product = 1;
+  double score = 2;
+}
