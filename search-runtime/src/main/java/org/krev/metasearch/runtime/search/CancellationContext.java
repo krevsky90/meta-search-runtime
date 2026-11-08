@@ -30,8 +30,11 @@ public final class CancellationContext {
         Objects.requireNonNull(result, "result must not be null");
 
         return register(() -> {
-            task.cancel(true);
-            result.cancel(false);
+            try {
+                task.cancel(true);
+            } finally {
+                result.cancel(false);
+            }
         });
     }
 
