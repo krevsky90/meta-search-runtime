@@ -8,9 +8,9 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public interface SearchSourceClient {
-    CompletableFuture<List<Product>> searchCatalog(String query);
+    SourceCall<List<Product>> searchCatalog(String query);
 
-    CompletableFuture<List<Offer>> searchOffers(String query);
+    SourceCall<List<Offer>> searchOffers(String query);
 
-    CompletableFuture<List<Review>> searchReviews(String query);
+    SourceCall<List<Review>> searchReviews(String query);
 }

@@ -12,3 +12,24 @@ thenCombineAsync(other, fn, executor)	Переданный executor
 То же семейство правил действует для thenCompose, handle, whenComplete и других методов с суффиксом Async.
 
 Самая важная мысль: суффикс Async отвечает за асинхронное планирование продолжения, а не за то, что вся цепочка автоматически начинает работать в отдельных потоках. Без Async продолжение может выполняться прямо в потоке, который завершил предыдущую стадию.
+
+--------
+Ограничение: общий deadline не сможет прервать синхронно блокирующий вызов searchCatalog() до того, как search() вернёт свой CompletableFuture.
+Поэтому мы предполагаем, что все методы из SearchSourceClient очень быстро возвращают CompletableFuture.
+А если мы знаем, что это не так, то надо в имплементации клиента создать ioExecutor и вызывать метод клиента в потоке этого ioExecutor-а,
+мгновенно возвращая CompletableFuture.
+
+orTimeout меняет (относится) к тому CompletableFuture, у которого он вызван. Сейчас это allOf результат, и это нас устраивает.
+И еще: orTimeout НЕ останавливает выполнение потока, который превысил время ожидания, а просто перестает его ждать!
+И еще: timeout не ограничивает синхронный вызов клиента.
+    searchFunction.apply(query) происходит синхронно.
+    Если реализация searchCatalog() зависнет на 2 секунды, прежде чем вернуть CompletableFuture, индивидуальный timeout в 200 мс не поможет.
+
+---------
+Прием, как не менять исходный future, но навесить timeout на его "копию":
+    идея - дописать .thenApply(Function.identity())
+    Пример:
+        CompletableFuture<List<Product>> timedFuture =
+                sourceFuture
+                        .thenApply(Function.identity())
+                        .orTimeout(400, TimeUnit.MILLISECONDS);
