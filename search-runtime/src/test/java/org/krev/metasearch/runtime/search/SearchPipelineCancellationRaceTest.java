@@ -1,6 +1,7 @@
 package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -39,12 +40,16 @@ class SearchPipelineCancellationRaceTest {
 
         CapturingExecutor executor = new CapturingExecutor();
 
-        SearchPipeline pipeline = new SearchPipeline(
-                sourceClient,
-                executor,
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
                 Duration.ofSeconds(10),
                 0,
                 SOURCE_TIMEOUTS
+        );
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                config
         );
 
         ExecutorService racers = Executors.newFixedThreadPool(2);

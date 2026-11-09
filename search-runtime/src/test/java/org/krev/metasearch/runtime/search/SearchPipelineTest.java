@@ -2,6 +2,7 @@
 package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -53,7 +54,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(1)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
 
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
@@ -93,7 +102,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(1)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
@@ -138,7 +155,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(1)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
 
@@ -187,7 +212,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(1)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
 
             ExecutionException exception = catchThrowableOfType(
                     () -> pipeline.search(QUERY).get(2, TimeUnit.SECONDS),
@@ -228,9 +261,6 @@ class SearchPipelineTest {
                 new ArrayBlockingQueue<>(1),
                 new ThreadPoolExecutor.AbortPolicy()
         );
-
-        Duration deadlineTimeout = Duration.ofMillis(500);
-        long terminationTimeout = 5;
 
         //workerStarted	Сообщить тесту, что рабочий поток действительно начал выполнение
         //releaseWorker	Не позволить рабочему потоку завершиться, пока тест этого не разрешит
@@ -275,14 +305,20 @@ class SearchPipelineTest {
                             List.of(new Review("r1"))
                     )));
 
-            SourceTimeouts sourceTimeouts = new SourceTimeouts(
+            SourceTimeouts timeouts = new SourceTimeouts(
                     Duration.ofSeconds(1),
                     Duration.ofSeconds(1),
                     Duration.ofSeconds(1)
             );
 
+            SearchRuntimeConfig config = new SearchRuntimeConfig(
+                    Duration.ofMillis(500L),
+                    5,
+                    timeouts
+            );
+
             // try to execute the next task and get rejection
-            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
+            try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
                 try {
                     SearchResultBox result = pipeline.search(QUERY).get(2, TimeUnit.SECONDS);
 
@@ -299,11 +335,11 @@ class SearchPipelineTest {
                 } finally {
                     // Что будет, если не вызвать countDown()?
                     // Рабочий поток останется заблокированным.
-                    // При вызове pipeline.close() метод awaitTermination(terminationTimeout, ...) будет ждать завершения executor до terminationTimeout секунд.
+                    // При вызове pipeline.close() метод awaitTermination(terminationTimeoutSeconds, ...) будет ждать завершения executor до terminationTimeoutSeconds секунд.
                     // Затем shutdownNow() попытается прервать поток, но это уже будет нештатный путь завершения теста.
 
                     // Лучше освободить поток до закрытия Pipeline
-                    // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeout,
+                    // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeoutSeconds,
                     //      пока рабочий поток всё ещё заблокирован на releaseWorker.await().
                     releaseWorker.countDown();
                 }
@@ -351,10 +387,7 @@ class SearchPipelineTest {
             }
         };
 
-        Duration deadlineTimeout = Duration.ofMillis(500);
-        long terminationTimeout = 5;
-
-        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+        SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(300),
                 Duration.ofMillis(300),
                 Duration.ofMillis(300)
@@ -375,7 +408,13 @@ class SearchPipelineTest {
                         List.of(new Review("r1"))
                )));
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                5,
+                timeouts
+        );
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
 
             SearchResultBox result = pipeline.search(QUERY)
                     .get(2, TimeUnit.SECONDS);
@@ -420,25 +459,21 @@ class SearchPipelineTest {
         when(sourceClient.searchOffers(anyString())).thenReturn(offersFuture);
         when(sourceClient.searchReviews(anyString())).thenReturn(reviewsFuture);
 
-        ThreadPoolExecutor cpuExecutor = new ThreadPoolExecutor(
-                2,
-                2,
-                0L,
-                TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(50),
-                new ThreadPoolExecutor.AbortPolicy()
-        );
-
-        Duration deadlineTimeout = Duration.ofMillis(500);
-        long terminationTimeout = 5;
-
-        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+        SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(1000),
                 Duration.ofMillis(1000),
                 Duration.ofMillis(1000)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                5,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             // When
             CompletableFuture<SearchResultBox> result = pipeline.search("phone");
 
@@ -474,13 +509,16 @@ class SearchPipelineTest {
 
         ThreadPoolExecutor cpuExecutor = createSingleThreadCpuExecutor();
 
-        Duration deadlineTimeout = Duration.ofMillis(500);
-        long terminationTimeout = 5;
-
-        SourceTimeouts sourceTimeouts = new SourceTimeouts(
+        SourceTimeouts timeouts = new SourceTimeouts(
                 Duration.ofMillis(300),
                 Duration.ofMillis(300),
                 Duration.ofMillis(300)
+        );
+
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                5,
+                timeouts
         );
 
         CountDownLatch workerStarted = new CountDownLatch(1);
@@ -498,7 +536,7 @@ class SearchPipelineTest {
 
         assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, deadlineTimeout, terminationTimeout, sourceTimeouts)) {
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, cpuExecutor, config)) {
             try {
                 // When
                 CompletableFuture<SearchResultBox> result = pipeline.search("phone");
@@ -513,7 +551,7 @@ class SearchPipelineTest {
                         .hasCauseInstanceOf(TimeoutException.class);
             } finally {
                 // Лучше освободить поток до закрытия Pipeline
-                // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeout,
+                // т.к. если close() ждёт завершения executor, он может ждать до terminationTimeoutSeconds,
                 //      пока рабочий поток всё ещё заблокирован на releaseWorker.await().
                 releaseWorker.countDown();
                 workerStarted.countDown();
@@ -567,7 +605,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(2)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             // when
             SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
 
@@ -613,7 +659,15 @@ class SearchPipelineTest {
                 Duration.ofSeconds(2)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             // when
             SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
 
@@ -659,7 +713,15 @@ class SearchPipelineTest {
                 Duration.ofMillis(100)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             // when
             SearchResultBox result = pipeline.search("phone").get(1, TimeUnit.SECONDS);
 
@@ -697,7 +759,15 @@ class SearchPipelineTest {
                 Duration.ofMillis(100)
         );
 
-        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, timeouts)) {
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
+                Duration.ofMillis(500L),
+                30L,
+                timeouts
+        );
+
+        ThreadPoolExecutor executor = createExecutor();
+
+        try (SearchPipeline pipeline = new SearchPipeline(sourceClient, executor, config)) {
             // when
             ExecutionException exception = catchThrowableOfType(
                     () -> pipeline.search("phone").get(1, TimeUnit.SECONDS),
@@ -726,4 +796,15 @@ class SearchPipelineTest {
     /**
      * проверка timeout-ов отдельных источников - end
      */
+
+    private ThreadPoolExecutor createExecutor() {
+        return new ThreadPoolExecutor(
+                2,
+                2,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(50),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
 }

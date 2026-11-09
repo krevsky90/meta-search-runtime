@@ -1,5 +1,8 @@
 package org.krev.metasearch.runtime.search;
 
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.exceptions.InvalidInputProcessingException;
@@ -19,48 +22,28 @@ import java.util.concurrent.*;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
+@Singleton
 public class SearchPipeline implements AutoCloseable {
     private final SearchSourceClient sourceClient;
     private final ThreadPoolExecutor cpuExecutor;
     private final Duration requestTimeout;
-    private final long terminationTimeout;
+    private final long terminationTimeoutSeconds;
     private final SourceTimeouts sourceTimeouts;
 
-    public SearchPipeline(SearchSourceClient sourceClient, SourceTimeouts sourceTimeouts) {
-        this(sourceClient, new ThreadPoolExecutor(
-                        8,
-                        8,
-                        0L,
-                        TimeUnit.MILLISECONDS,
-                        new ArrayBlockingQueue<>(50),
-                        new ThreadPoolExecutor.AbortPolicy()
-                ),
-                Duration.ofMillis(500L),
-                30L,
-                sourceTimeouts
-        );
-    }
-
-    SearchPipeline(
+    @Inject
+    public SearchPipeline(
             SearchSourceClient sourceClient,
             ThreadPoolExecutor cpuExecutor,
-            Duration requestTimeout,
-            long terminationTimeout,
-            SourceTimeouts sourceTimeouts
+            SearchRuntimeConfig searchRuntimeConfig
     ) {
         this.sourceClient = Objects.requireNonNull(sourceClient);
         this.cpuExecutor = Objects.requireNonNull(cpuExecutor);
-        this.requestTimeout = Objects.requireNonNull(requestTimeout);
-        this.terminationTimeout = terminationTimeout;
-        this.sourceTimeouts = Objects.requireNonNull(sourceTimeouts);
 
-        if (requestTimeout.isZero() || requestTimeout.isNegative()) {
-            throw new IllegalArgumentException("requestTimeout must be positive");
-        }
+        Objects.requireNonNull(searchRuntimeConfig);
 
-        if (terminationTimeout < 0) {
-            throw new IllegalArgumentException("terminationTimeout must not be negative");
-        }
+        this.requestTimeout = searchRuntimeConfig.requestTimeout();
+        this.terminationTimeoutSeconds = searchRuntimeConfig.terminationTimeoutSeconds();
+        this.sourceTimeouts = searchRuntimeConfig.sourceTimeouts();
     }
 
     // --------------------------------------------------------
@@ -519,7 +502,7 @@ public class SearchPipeline implements AutoCloseable {
     public void close() {
         cpuExecutor.shutdown();
         try {
-            if (!cpuExecutor.awaitTermination(terminationTimeout, TimeUnit.SECONDS)) {
+            if (!cpuExecutor.awaitTermination(terminationTimeoutSeconds, TimeUnit.SECONDS)) {
                 cpuExecutor.shutdownNow();
             }
         } catch (InterruptedException ex) {

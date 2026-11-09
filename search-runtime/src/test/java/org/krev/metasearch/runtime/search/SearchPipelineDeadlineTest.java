@@ -1,6 +1,7 @@
 
 package org.krev.metasearch.runtime.search;
 
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -239,12 +240,14 @@ class SearchPipelineDeadlineTest {
                             TimeUnit.MILLISECONDS,
                             new LinkedBlockingQueue<>()
                     ),
-                    requestTimeout,
-                    2L,
-                    new SourceTimeouts(
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT
+                    new SearchRuntimeConfig(
+                            requestTimeout,
+                            2L,
+                            new SourceTimeouts(
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT
+                            )
                     )
             );
 
