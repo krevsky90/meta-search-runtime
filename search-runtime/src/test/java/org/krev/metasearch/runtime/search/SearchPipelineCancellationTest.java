@@ -1,6 +1,7 @@
 package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.SearchResultBox;
 import org.krev.metasearch.runtime.error_model.SourceTimeouts;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -42,12 +43,16 @@ class SearchPipelineCancellationTest {
 
         CapturingExecutor executor = new CapturingExecutor();
 
-        SearchPipeline pipeline = new SearchPipeline(
-                sourceClient,
-                executor,
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
                 Duration.ofSeconds(10),
                 0,
                 SOURCE_TIMEOUTS
+        );
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                config
         );
 
         CompletableFuture<SearchResultBox> result = pipeline.search(QUERY);
@@ -84,12 +89,16 @@ class SearchPipelineCancellationTest {
 
         CapturingExecutor executor = new CapturingExecutor();
 
-        SearchPipeline pipeline = new SearchPipeline(
-                sourceClient,
-                executor,
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
                 Duration.ofMillis(200),
                 0,
                 SOURCE_TIMEOUTS
+        );
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                config
         );
 
         CompletableFuture<SearchResultBox> result = pipeline.search(QUERY);
@@ -133,12 +142,16 @@ class SearchPipelineCancellationTest {
 
         CapturingExecutor executor = new CapturingExecutor();
 
-        SearchPipeline pipeline = new SearchPipeline(
-                sourceClient,
-                executor,
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
                 Duration.ofSeconds(10),
                 0,
                 SOURCE_TIMEOUTS
+        );
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                config
         );
 
         CompletableFuture<SearchResultBox> result = pipeline.search(QUERY);
@@ -172,12 +185,16 @@ class SearchPipelineCancellationTest {
 
         CapturingExecutor executor = new CapturingExecutor();
 
-        SearchPipeline pipeline = new SearchPipeline(
-                sourceClient,
-                executor,
+        SearchRuntimeConfig config = new SearchRuntimeConfig(
                 Duration.ofSeconds(10),
                 0,
                 SOURCE_TIMEOUTS
+        );
+
+        SearchPipeline pipeline = new SearchPipeline(
+                sourceClient,
+                executor,
+                config
         );
 
         CompletableFuture<SearchResultBox> result = pipeline.search(QUERY);
@@ -294,14 +311,13 @@ class SearchPipelineCancellationTest {
                             TimeUnit.MILLISECONDS,
                             new LinkedBlockingQueue<>()
                     ),
-                    requestTimeout,
-                    2L,
-                    new SourceTimeouts(
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT
-                    )
-            );
+                    new SearchRuntimeConfig(requestTimeout, 2L,
+                            new SourceTimeouts(
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT
+                            )
+                    ));
 
             this.filterFunction = filterFunction;
             this.rankFunction = rankFunction;

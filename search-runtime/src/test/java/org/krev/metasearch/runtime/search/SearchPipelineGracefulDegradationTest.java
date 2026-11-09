@@ -1,6 +1,7 @@
 package org.krev.metasearch.runtime.search;
 
 import org.junit.jupiter.api.Test;
+import org.krev.metasearch.runtime.config.SearchRuntimeConfig;
 import org.krev.metasearch.runtime.error_model.*;
 import org.krev.metasearch.runtime.exceptions.AllSourcesUnavailableException;
 import org.krev.metasearch.runtime.external.SearchSourceClient;
@@ -40,7 +41,7 @@ class SearchPipelineGracefulDegradationTest {
 
     /**
      * Catalog недоступен, но Offers и Reviews доступны.
-     *
+     * <p>
      * Ожидаем:
      * - поиск возвращает частичный результат;
      * - products пустой;
@@ -98,7 +99,7 @@ class SearchPipelineGracefulDegradationTest {
 
     /**
      * Фильтрация завершается исключением.
-     *
+     * <p>
      * Ожидаем:
      * - products заменяются на пустой список;
      * - создаётся ProcessingError для FILTER_PRODUCTS;
@@ -147,7 +148,7 @@ class SearchPipelineGracefulDegradationTest {
 
     /**
      * Ранжирование завершается исключением.
-     *
+     * <p>
      * Ожидаем:
      * - сохраняется результат фильтрации;
      * - создаётся ProcessingError для RANK_PRODUCTS;
@@ -202,7 +203,7 @@ class SearchPipelineGracefulDegradationTest {
 
     /**
      * Все три источника недоступны.
-     *
+     * <p>
      * Ожидаем:
      * - весь pipeline завершается AllSourcesUnavailableException;
      * - CPU processing не запускается.
@@ -288,12 +289,14 @@ class SearchPipelineGracefulDegradationTest {
                             TimeUnit.MILLISECONDS,
                             new LinkedBlockingQueue<>()
                     ),
-                    REQUEST_TIMEOUT,
-                    2L,
-                    new SourceTimeouts(
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT,
-                            SOURCE_TIMEOUT
+                    new SearchRuntimeConfig(
+                            REQUEST_TIMEOUT,
+                            2L,
+                            new SourceTimeouts(
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT,
+                                    SOURCE_TIMEOUT
+                            )
                     )
             );
 
